@@ -4,44 +4,36 @@
 
 @layer base {
   :root {
-    /* Core surface colours */
-    --background: 220 20% 97%;        /* slate-50-ish page background */
-    --foreground: 222 47% 11%;        /* near-black text */
+    --background: 220 20% 97%;
+    --foreground: 222 47% 11%;
 
-    /* Card / panel */
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
 
-    /* Primary — blue-600 */
+    /* blue-600 */
     --primary: 221 83% 53%;
     --primary-foreground: 0 0% 100%;
 
-    /* Secondary — slate-100 */
     --secondary: 220 14% 96%;
     --secondary-foreground: 222 47% 11%;
 
-    /* Muted */
     --muted: 220 14% 96%;
     --muted-foreground: 215 16% 47%;
 
-    /* Accent */
     --accent: 220 14% 94%;
     --accent-foreground: 222 47% 11%;
 
-    /* Destructive */
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    /* Borders / inputs */
     --border: 220 13% 91%;
     --input: 220 13% 91%;
     --ring: 221 83% 53%;
 
-    /* Radius */
     --radius: 0.625rem;
   }
 
-  /* Dark mode — kept for completeness but not used in this design */
+  /* dark mode vars — defined but not actively used yet */
   .dark {
     --background: 222 47% 7%;
     --foreground: 210 40% 98%;
@@ -83,7 +75,7 @@
       'Helvetica Neue', Arial, sans-serif;
   }
 
-  /* Thin, styled scrollbar for the sidebar and any scrollable panel */
+  /* thin scrollbar globally */
   ::-webkit-scrollbar {
     width: 4px;
     height: 4px;
@@ -99,7 +91,7 @@
     background: hsl(var(--muted-foreground) / 0.4);
   }
 
-  /* Sidebar-specific darker scrollbar */
+  /* slightlly different thumb color inside the dark sidebar */
   aside ::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.12);
   }
@@ -109,12 +101,10 @@
 }
 
 @layer utilities {
-  /* Focus ring shorthand */
   .focus-ring {
     @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1;
   }
 
-  /* Subtle card shadow used across panels */
   .card-shadow {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   }

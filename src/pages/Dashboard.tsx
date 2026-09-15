@@ -73,6 +73,9 @@ const metrics = [
   },
 ]
 
+
+
+
 // chart data (8 weeks)
 const chartData = [
   { week: 'Week 1', created: 28, updated: 18 },
@@ -85,6 +88,10 @@ const chartData = [
   { week: 'Week 8 (Current)', created: 55, updated: 48 },
 ]
 const maxVal = Math.max(...chartData.flatMap(d => [d.created, d.updated]))
+
+
+
+
 
 // quick actions
 const quickActions = [
@@ -118,59 +125,64 @@ const quickActions = [
   },
 ]
 
+
+
+
 // recent activity
 const recentActivity = [
   {
     id: 1,
-    user: 'Ahmed Hassan',
+    user: 'Adam Ahmed',
     action: 'approved',
     doc: 'SOP-102 (POS Troubleshooting SOP)',
     time: '15 minutes ago',
     dot: 'bg-green-500',
-    initials: 'AH',
+    initials: 'AA',
     avatarBg: 'bg-indigo-100 text-indigo-700',
   },
   {
     id: 2,
-    user: 'Elena Rostova',
+    user: 'Nour El-Din',
     action: 'submitted draft',
     doc: 'v1.6 of Receipt Printer Troubleshooting Guide',
     time: '45 minutes ago',
     dot: 'bg-blue-500',
-    initials: 'ER',
+    initials: 'NE',
     avatarBg: 'bg-pink-100 text-pink-700',
   },
   {
     id: 3,
-    user: 'David Chen',
+    user: 'Hassan Mostafa',
     action: 'updated',
     doc: 'Operational Case 03-412 (POS Not Powering On)',
     time: '2 hours ago',
     dot: 'bg-orange-400',
-    initials: 'DC',
+    initials: 'HM',
     avatarBg: 'bg-orange-100 text-orange-700',
   },
   {
     id: 4,
-    user: 'Sarah Jenkins',
+    user: 'Youssef Hussein',
     action: 'updated access permissions for',
     doc: 'Device Maintenance Guidelines',
     time: '4 hours ago',
     dot: 'bg-blue-500',
-    initials: 'SJ',
+    initials: 'YH',
     avatarBg: 'bg-blue-100 text-blue-700',
   },
   {
     id: 5,
-    user: 'Mohamed Ali',
+    user: 'Karim Mahmoud',
     action: 'published v2.0 of',
     doc: 'Windows Installation SOP',
     time: '6 hours ago',
     dot: 'bg-purple-500',
-    initials: 'MA',
-    avatarBg: 'bg-indigo-100 text-indigo-700',
+    initials: 'KM',
+    avatarBg: 'bg-purple-100 text-purple-700',
   },
 ]
+
+
 
 // documents table
 const documents = [
@@ -181,7 +193,7 @@ const documents = [
     type: 'SOP',
     typeColor: 'bg-blue-100 text-blue-700',
     version: 'v1.8',
-    owner: 'A. Hassan',
+    owner: 'A. Ahmed',
     ownerBg: 'bg-indigo-100 text-indigo-700',
     status: 'Approved',
     statusColor: 'bg-green-100 text-green-700',
@@ -193,7 +205,7 @@ const documents = [
     type: 'Technical Document',
     typeColor: 'bg-teal-100 text-teal-700',
     version: 'v1.6',
-    owner: 'E. Rostova',
+    owner: 'N. El-Din',
     ownerBg: 'bg-pink-100 text-pink-700',
     status: 'In Review',
     statusColor: 'bg-amber-100 text-amber-700',
@@ -205,7 +217,7 @@ const documents = [
     type: 'Operational Case',
     typeColor: 'bg-orange-100 text-orange-700',
     version: 'v1.0',
-    owner: 'D. Chen',
+    owner: 'H. Mostafa',
     ownerBg: 'bg-orange-100 text-orange-700',
     status: 'Approved',
     statusColor: 'bg-green-100 text-green-700',
@@ -217,22 +229,23 @@ const documents = [
     type: 'Org Info',
     typeColor: 'bg-slate-100 text-slate-600',
     version: 'v1.5',
-    owner: 'S. Jenkins',
+    owner: 'Y. Hussein',
     ownerBg: 'bg-blue-100 text-blue-700',
     status: 'Draft',
     statusColor: 'bg-slate-100 text-slate-600',
   },
 ]
 
-// ─────────────────────────────────────────────────────────────────────────────
 export function Dashboard() {
   return (
     <div className="space-y-5">
 
+
+
       {/* welcome + top ctas */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Welcome back, Sarah Jenkins</h1>
+          <h1 className="text-xl font-bold text-slate-900">Welcome back, Youssef Hussein</h1>
           <div className="flex items-center flex-wrap gap-1.5 mt-1 text-[13px] text-slate-500">
             <button className="text-blue-600 hover:underline font-medium">Technical Support Knowledge Base</button>
             <ChevronRight className="w-3.5 h-3.5" />
@@ -257,6 +270,10 @@ export function Dashboard() {
         </div>
       </div>
 
+
+
+
+
       {/* metric cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {metrics.map((m) => {
@@ -271,7 +288,10 @@ export function Dashboard() {
               </div>
               <p className="text-2xl font-bold text-slate-900 leading-none mb-2">{m.value}</p>
 
-              {/* optional sub-badges */}
+
+
+
+              {/* show sub-badges for the pending approvals card */}
               {m.subBadges && (
                 <div className="flex flex-wrap gap-1 mb-2">
                   {m.subBadges.map(b => (
@@ -280,7 +300,11 @@ export function Dashboard() {
                 </div>
               )}
 
-              {/* optional stacked bar */}
+
+
+
+
+              {/* stacked bar for the doc types card */}
               {m.bar && (
                 <div className="flex gap-0.5 h-1.5 rounded-full overflow-hidden mb-2">
                   {m.bar.map(b => (
@@ -289,7 +313,9 @@ export function Dashboard() {
                 </div>
               )}
 
-              {/* simple text sub */}
+
+
+              {/* plain text breakdown for the other cards */}
               {!m.subBadges && !m.bar && (
                 <p className="text-[11px] text-slate-500 leading-relaxed">
                   {m.sub.join(' · ')}
@@ -330,6 +356,8 @@ export function Dashboard() {
             </div>
           </div>
 
+
+
           {/* chart */}
           <div className="mt-4 flex items-end gap-2 h-44 px-1">
             {chartData.map((d, i) => {
@@ -356,6 +384,8 @@ export function Dashboard() {
             })}
           </div>
 
+
+
           {/* legend */}
           <div className="flex items-center gap-4 mt-3 pt-3 border-t border-slate-100">
             <div className="flex items-center gap-1.5">
@@ -369,6 +399,8 @@ export function Dashboard() {
             <span className="ml-auto text-[11px] text-slate-400">Showing activity over past 8 weeks</span>
           </div>
         </div>
+
+
 
         {/* quick actions panel */}
         <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col">
@@ -398,6 +430,8 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+
 
       {/* documents table + activity log */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
@@ -475,6 +509,9 @@ export function Dashboard() {
             </button>
           </div>
         </div>
+
+
+
 
         {/* recent activity log */}
         <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col">

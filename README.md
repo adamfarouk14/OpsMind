@@ -4,11 +4,11 @@ A web-based Knowledge Management System (KMS) for the Technical Support Departme
 
 ## Technologies & Languages used
 
-- **React** > UI framework
-- **TypeScript**  > Type safety
-- **Tailwind CSS** > Styling
-- **shadcn/ui** > UI components
-- **Supabase** > Backend & Database
+- **React** → UI development
+- **TypeScript** → App development
+- **Tailwind CSS** → Styling
+- **shadcn/ui** → UI components
+- **Supabase** → Backend & Database
 
 
 
