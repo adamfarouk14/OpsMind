@@ -1,5 +1,5 @@
 import { Link, useLocation } from 'react-router-dom'
-import logo from '@/assets/opsmind_mainlogo.png'
+import logo from '../../assets/opsmind_mainlogo.png'
 import {
   LayoutDashboard,
   FileText,

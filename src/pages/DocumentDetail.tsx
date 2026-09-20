@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById } from '@/data/documents'
-import type { DocStatus } from '@/data/documents'
+import { getDocumentById } from '../data/documents'
+import type { DocStatus } from '../data/documents'
 import {
   ArrowLeft,
   Pencil,

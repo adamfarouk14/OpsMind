@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { DocType } from '@/data/documents'
+import type { DocType } from '../data/documents'
 import { ArrowLeft, Save, X, AlertCircle, ChevronDown, FileText } from 'lucide-react'
 
 export function CreateDocument() {

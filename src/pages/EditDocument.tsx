@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById, DocType } from '@/data/documents'
-import { ArrowLeft, Save, X, AlertCircle, ChevronDown } from 'lucide-react'
+import { getDocumentById, type DocType, type Document } from '../data/documents'
+import { ArrowLeft, Save, X, AlertCircle, ChevronDown, GitBranch } from 'lucide-react'
 
 export function EditDocument() {
   const { id } = useParams()
@@ -19,6 +19,17 @@ export function EditDocument() {
   })
 
   const [showDiscardModal, setShowDiscardModal] = useState(false)
+  const [createNewVersion, setCreateNewVersion] = useState(false)
+
+  const incrementVersion = (currentVersion: string): string => {
+    const match = currentVersion.match(/v(\d+)\.(\d+)/)
+    if (match) {
+      const major = parseInt(match[1])
+      const minor = parseInt(match[2])
+      return `v${major}.${minor + 1}`
+    }
+    return 'v1.1'
+  }
 
   if (!doc) {
     return (
@@ -37,7 +48,25 @@ export function EditDocument() {
   }
 
   const handleSave = () => {
-    console.log('Saving document:', form)
+    const newVersion = createNewVersion ? incrementVersion(doc.version) : doc.version
+    const tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t)
+
+    if (createNewVersion && form.versionNotes.trim()) {
+      const newVersionEntry = {
+        version: newVersion,
+        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        author: 'Current User',
+        notes: form.versionNotes,
+      }
+      console.log('Creating new version:', newVersionEntry)
+    }
+
+    console.log('Saving document:', {
+      ...form,
+      version: newVersion,
+      tags: tagsArray,
+      createNewVersion,
+    })
     navigate(`/documents/${doc.id}`)
   }
 
@@ -104,10 +133,11 @@ export function EditDocument() {
             </button>
             <button
               onClick={handleSave}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+              disabled={createNewVersion && !form.versionNotes.trim()}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
             >
               <Save className="w-3.5 h-3.5" />
-              Save Changes
+              {createNewVersion ? `Save as ${incrementVersion(doc.version)}` : 'Save Changes'}
             </button>
           </div>
         </div>
@@ -232,19 +262,74 @@ export function EditDocument() {
               </div>
             </div>
 
+            {/* version history */}
+            {doc.versions.length > 0 && (
+              <div className="bg-white rounded-xl border border-slate-200 p-5">
+                <h2 className="text-sm font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                  <GitBranch className="w-3.5 h-3.5" />
+                  Version History
+                </h2>
+                <div className="space-y-2">
+                  {doc.versions.map((v, i) => (
+                    <div key={i} className="flex items-start gap-2 pb-2 border-b border-slate-100 last:border-0 last:pb-0">
+                      <div className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <GitBranch className="w-2.5 h-2.5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-0.5">
+                          <p className="text-xs font-semibold text-slate-900">{v.version}</p>
+                          <p className="text-[10px] text-slate-400">{v.date}</p>
+                        </div>
+                        <p className="text-[10px] text-slate-600 truncate">{v.notes}</p>
+                        <p className="text-[10px] text-slate-400">by {v.author}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* version notes */}
             <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <h2 className="text-sm font-semibold text-slate-900 mb-3">Version Notes</h2>
-              <textarea
-                rows={4}
-                value={form.versionNotes}
-                onChange={e => setForm({ ...form, versionNotes: e.target.value })}
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                placeholder="Describe what changed in this version..."
-              />
-              <p className="text-xs text-slate-400 mt-2">
-                Version notes help track changes over time
-              </p>
+              <h2 className="text-sm font-semibold text-slate-900 mb-3">Version Options</h2>
+              
+              <div className="flex items-start gap-3 mb-4">
+                <input
+                  type="checkbox"
+                  id="createNewVersion"
+                  checked={createNewVersion}
+                  onChange={e => setCreateNewVersion(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <div className="flex-1">
+                  <label htmlFor="createNewVersion" className="block text-xs font-semibold text-slate-900 mb-1">
+                    Create New Version
+                  </label>
+                  <p className="text-xs text-slate-500">
+                    {createNewVersion 
+                      ? `Will create ${incrementVersion(doc.version)} and preserve current version` 
+                      : 'Will update current version without creating a new one'}
+                  </p>
+                </div>
+              </div>
+
+              {createNewVersion && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    Version Notes *
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={form.versionNotes}
+                    onChange={e => setForm({ ...form, versionNotes: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    placeholder="Describe what changed in this version..."
+                  />
+                  <p className="text-xs text-slate-400 mt-2">
+                    Version notes help track changes over time
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* info box */}
@@ -254,7 +339,9 @@ export function EditDocument() {
                 <div>
                   <p className="text-xs font-semibold text-blue-900 mb-1">Saving Changes</p>
                   <p className="text-xs text-blue-700 leading-relaxed">
-                    Changes will be saved as a new draft. To publish, submit for approval after saving.
+                    {createNewVersion 
+                      ? `A new version (${incrementVersion(doc.version)}) will be created and the current version will be preserved.`
+                      : 'Changes will update the current version directly without creating a new version.'}
                   </p>
                 </div>
               </div>
