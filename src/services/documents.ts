@@ -45,14 +45,14 @@ export async function getDocumentById(id: string): Promise<DocumentWithVersions 
         avatar_color
       )
     `)
-    .eq('document_id', id)
+    .eq('documentId', id)
     .order('created_at', { ascending: false })
 
   // Get approvals
   const { data: approvals } = await supabase
     .from('approvals')
     .select('*')
-    .eq('document_id', id)
+    .eq('documentId', id)
     .order('created_at', { ascending: true })
 
   return {
@@ -123,7 +123,7 @@ export async function createDocumentVersion(documentId: string, version: {
   const { data, error } = await supabase
     .from('document_versions')
     .insert({
-      document_id,
+      documentId,
       ...version,
     })
     .select()
@@ -137,7 +137,7 @@ export async function getNextVersionNumber(documentId: string): Promise<number> 
   const { data, error } = await supabase
     .from('document_versions')
     .select('version')
-    .eq('document_id', documentId)
+    .eq('documentId', documentId)
     .order('created_at', { ascending: false })
     .limit(1)
 
