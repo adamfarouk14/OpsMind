@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { mockDocuments } from '../data/documents'
+import { useState, useEffect } from 'react'
+import { searchDocuments, getDocuments } from '../services/documents'
 import {
   Sparkles,
   Send,
@@ -18,7 +18,7 @@ interface Message {
   content: string
   timestamp: string
   sources?: Array<{
-    id: number
+    id: string
     title: string
     code: string
     type: string
@@ -37,6 +37,11 @@ export function AIKnowledge() {
     },
   ])
   const [isProcessing, setIsProcessing] = useState(false)
+  const [allDocs, setAllDocs] = useState<any[]>([])
+
+  useEffect(() => {
+    getDocuments().then(docs => setAllDocs(docs)).catch(console.error)
+  }, [])
 
   const handleSend = async () => {
     if (!query.trim()) return
@@ -45,27 +50,23 @@ export function AIKnowledge() {
       id: messages.length + 1,
       type: 'user',
       content: query,
-      timestamp: 'Just now',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }
 
     setMessages(prev => [...prev, userMessage])
+    const currentQuery = query
     setQuery('')
     setIsProcessing(true)
 
-    // Simulate AI processing
-    setTimeout(() => {
-      const relevantDocs = mockDocuments.filter(doc =>
-        doc.title.toLowerCase().includes(query.toLowerCase()) ||
-        doc.description.toLowerCase().includes(query.toLowerCase()) ||
-        doc.content.toLowerCase().includes(query.toLowerCase()) ||
-        doc.tags.some(tag => tag.toLowerCase().includes(query.toLowerCase()))
-      ).slice(0, 3)
+    try {
+      const results = await searchDocuments(currentQuery)
+      const relevantDocs = results.slice(0, 3)
 
       const aiMessage: Message = {
         id: messages.length + 2,
         type: 'ai',
-        content: generateAIResponse(query, relevantDocs),
-        timestamp: 'Just now',
+        content: generateAIResponse(currentQuery, relevantDocs),
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         sources: relevantDocs.length > 0 ? relevantDocs.map(doc => ({
           id: doc.id,
           title: doc.title,
@@ -76,8 +77,17 @@ export function AIKnowledge() {
       }
 
       setMessages(prev => [...prev, aiMessage])
+    } catch (err) {
+      const errMessage: Message = {
+        id: messages.length + 2,
+        type: 'ai',
+        content: 'Sorry, I encountered an error while searching the knowledge base. Please try again.',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+      setMessages(prev => [...prev, errMessage])
+    } finally {
       setIsProcessing(false)
-    }, 1500)
+    }
   }
 
   const generateAIResponse = (query: string, docs: any[]): string => {

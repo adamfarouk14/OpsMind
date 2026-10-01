@@ -1,10 +1,15 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { DocType } from '../data/documents'
-import { ArrowLeft, Save, X, AlertCircle, ChevronDown, FileText } from 'lucide-react'
+import type { DocType } from '../types/database'
+import { createDocument } from '../services/documents'
+import { logActivity } from '../services/activityLogs'
+import { useAuth } from '../contexts/AuthContext'
+import { supabase } from '../lib/supabase'
+import { ArrowLeft, Save, X, AlertCircle, ChevronDown, FileText, Loader2, Upload, Paperclip } from 'lucide-react'
 
 export function CreateDocument() {
   const navigate = useNavigate()
+  const { user } = useAuth()
 
   const [form, setForm] = useState({
     title: '',
@@ -13,13 +18,86 @@ export function CreateDocument() {
     description: '',
     content: '',
     tags: '',
+    category: '',
   })
 
+  const [file, setFile] = useState<File | null>(null)
   const [showDiscardModal, setShowDiscardModal] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleCreate = () => {
-    console.log('Creating document:', form)
-    navigate('/documents')
+  const generateCode = (type: DocType): string => {
+    const prefixes: Record<DocType, string> = {
+      'SOP': 'SOP',
+      'Technical Document': 'TG',
+      'Operational Case': 'OC',
+      'Org Info': 'ORG',
+    }
+    const prefix = prefixes[type]
+    const num = Math.floor(100 + Math.random() * 900)
+    return `${prefix}-${num}`
+  }
+
+  const handleCreate = async () => {
+    if (!user) {
+      setError('You must be logged in to create a document')
+      return
+    }
+
+    try {
+      setLoading(true)
+      setError(null)
+
+      const finalCode = form.code.trim() || generateCode(form.type)
+      let fileUrl: string | null = null
+
+      // Upload file to Supabase Storage if provided
+      if (file) {
+        const ext = file.name.split('.').pop()
+        const path = `${user.id}/${Date.now()}_${finalCode}.${ext}`
+        const { error: uploadError } = await supabase.storage
+          .from('documents')
+          .upload(path, file, { upsert: false })
+        if (uploadError) throw new Error('File upload failed: ' + uploadError.message)
+        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(path)
+        fileUrl = urlData.publicUrl
+      }
+
+      // Build tags — include category as a tag for Operational Cases
+      const tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t !== '')
+      if (form.type === 'Operational Case' && form.category.trim()) {
+        tagsArray.unshift(`Category: ${form.category.trim()}`)
+      }
+
+      const doc = await createDocument({
+        title: form.title,
+        code: finalCode,
+        type: form.type,
+        version: 'v1.0',
+        description: form.description,
+        content: fileUrl ? `${form.content}\n\n[Attached file: ${fileUrl}]` : form.content,
+        tags: tagsArray,
+        status: 'Draft',
+        owner_id: user.id,
+      })
+
+      await logActivity({
+        user_id: user.id,
+        action: 'create',
+        target_type: 'document',
+        target_id: doc.id,
+        target_title: form.title,
+        target_code: form.code,
+        details: `Created new ${form.type}: ${form.title}`,
+      })
+
+      navigate('/documents')
+    } catch (err) {
+      setError('Failed to create document: ' + (err as Error).message)
+      console.error('Error creating document:', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleDiscard = () => {
@@ -62,6 +140,21 @@ export function CreateDocument() {
       )}
 
       <div className="space-y-5">
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        )}
+
+        {loading && (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+            <span className="ml-3 text-sm text-slate-500">Creating document...</span>
+          </div>
+        )}
+
+        {!loading && (
+          <>
         {/* header */}
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -273,6 +366,8 @@ export function CreateDocument() {
             </div>
           </div>
         </div>
+          </>
+        )}
       </div>
     </>
   )

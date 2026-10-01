@@ -1,7 +1,7 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { mockDocuments } from '../data/documents'
-import type { DocType } from '../data/documents'
+import { useState, useEffect } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { getDocuments, searchDocuments } from '../services/documents'
+import type { DocType } from '../types/database'
 import {
   Search as SearchIcon,
   FileText,
@@ -13,6 +13,7 @@ import {
   ArrowRight,
   Clock,
   Star,
+  Loader2,
 } from 'lucide-react'
 
 const TYPE_CONFIG: Record<DocType, { icon: React.ElementType; color: string; label: string }> = {
@@ -24,20 +25,54 @@ const TYPE_CONFIG: Record<DocType, { icon: React.ElementType; color: string; lab
 
 export function Search() {
   const navigate = useNavigate()
-  const [query, setQuery] = useState('')
+  const [searchParams] = useSearchParams()
+  const [query, setQuery] = useState(searchParams.get('q') || '')
   const [activeType, setActiveType] = useState<DocType | 'All'>('All')
   const [recentSearches, setRecentSearches] = useState<string[]>(['POS installation', 'printer troubleshooting', 'network issues'])
+  const [documents, setDocuments] = useState<any[]>([])
+  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const filteredDocs = mockDocuments.filter(doc => {
+  useEffect(() => {
+    async function loadDocuments() {
+      try {
+        const data = await getDocuments()
+        setDocuments(data)
+      } catch (err) {
+        setError('Failed to load documents: ' + (err as Error).message)
+        console.error('Error loading documents:', err)
+      }
+    }
+    loadDocuments()
+  }, [])
+
+  useEffect(() => {
+    async function performSearch() {
+      if (query.trim() === '') {
+        setSearchResults([])
+        return
+      }
+
+      try {
+        setLoading(true)
+        const results = await searchDocuments(query)
+        setSearchResults(results)
+      } catch (err) {
+        setError('Failed to search: ' + (err as Error).message)
+        console.error('Error searching:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    const debounceTimer = setTimeout(performSearch, 300)
+    return () => clearTimeout(debounceTimer)
+  }, [query])
+
+  const filteredDocs = searchResults.length > 0 ? searchResults : documents.filter(doc => {
     const matchType = activeType === 'All' || doc.type === activeType
-    const matchQuery = query === '' || 
-      doc.title.toLowerCase().includes(query.toLowerCase()) ||
-      doc.code.toLowerCase().includes(query.toLowerCase()) ||
-      doc.description.toLowerCase().includes(query.toLowerCase()) ||
-      doc.content.toLowerCase().includes(query.toLowerCase()) ||
-      doc.tags.some(tag => tag.toLowerCase().includes(query.toLowerCase()))
-    
-    return matchType && matchQuery
+    return matchType
   })
 
   const handleSearch = (e: React.FormEvent) => {
@@ -53,6 +88,12 @@ export function Search() {
 
   return (
     <div className="space-y-5">
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm text-red-700">{error}</p>
+        </div>
+      )}
+
       {/* header */}
       <div>
         <h1 className="text-xl font-bold text-slate-900">Search Knowledge Base</h1>
@@ -79,6 +120,9 @@ export function Search() {
           >
             <X className="w-5 h-5" />
           </button>
+        )}
+        {loading && (
+          <Loader2 className="absolute right-12 top-1/2 -translate-y-1/2 text-blue-600 w-5 h-5 animate-spin" />
         )}
       </form>
 
@@ -184,7 +228,7 @@ export function Search() {
                           <span className="mx-1">•</span>
                           {doc.version}
                           <span className="mx-1">•</span>
-                          {doc.owner}
+                          {doc.users?.name || 'Unknown'}
                         </p>
                         
                         <p 
@@ -193,10 +237,10 @@ export function Search() {
                         />
                         
                         {/* tags */}
-                        {doc.tags.length > 0 && (
+                        {doc.tags && doc.tags.length > 0 && (
                           <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                            {doc.tags.slice(0, 3).map((tag, i) => (
-                              <span 
+                            {doc.tags.slice(0, 3).map((tag: string, i: number) => (
+                              <span
                                 key={i}
                                 className="text-xs px-2 py-0.5 bg-slate-100 text-slate-600 rounded"
                                 dangerouslySetInnerHTML={{ __html: highlightText(tag) }}
@@ -228,10 +272,10 @@ export function Search() {
             Quick Access
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {mockDocuments.slice(0, 6).map(doc => {
+            {documents.slice(0, 6).map(doc => {
               const typeConfig = TYPE_CONFIG[doc.type]
               const TypeIcon = typeConfig.icon
-              
+
               return (
                 <button
                   key={doc.id}

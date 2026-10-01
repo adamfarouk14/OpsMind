@@ -1,6 +1,10 @@
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById } from '../data/documents'
-import type { DocStatus } from '../data/documents'
+import { getDocumentById, createDocumentVersion } from '../services/documents'
+import { submitForApproval } from '../services/approvals'
+import { logActivity } from '../services/activityLogs'
+import type { DocStatus } from '../types/database'
+import { useAuth } from '../contexts/AuthContext'
 import {
   ArrowLeft,
   Pencil,
@@ -17,7 +21,12 @@ import {
   CheckCircle2,
   XCircle,
   CircleDashed,
-  MoreHorizontal,
+  Activity,
+  Loader2,
+  Plus,
+  Save,
+  X,
+  Send,
 } from 'lucide-react'
 
 const STATUS_STYLES: Record<DocStatus, string> = {
@@ -37,7 +46,111 @@ const STATUS_ICONS: Record<DocStatus, React.ElementType> = {
 export function DocumentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const doc = getDocumentById(Number(id))
+  const { user } = useAuth()
+  const [doc, setDoc] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [showVersionModal, setShowVersionModal] = useState(false)
+  const [newVersion, setNewVersion] = useState('')
+  const [versionNotes, setVersionNotes] = useState('')
+  const [creatingVersion, setCreatingVersion] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    async function loadDocument() {
+      try {
+        if (!id) return
+        const documentData = await getDocumentById(id)
+        setDoc(documentData)
+        // Set next version number
+        const currentVersion = documentData.version || 'v1.0'
+        const versionNum = parseInt(currentVersion.replace('v', '').split('.')[0]) + 1
+        setNewVersion(`v${versionNum}.0`)
+      } catch (err) {
+        setError('Failed to load document: ' + (err as Error).message)
+        console.error('Error loading document:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadDocument()
+  }, [id])
+
+  const handleCreateVersion = async () => {
+    if (!doc || !user) return
+
+    try {
+      setCreatingVersion(true)
+      await createDocumentVersion(doc.id, {
+        version: newVersion,
+        author_id: user.id,
+        notes: versionNotes,
+      })
+      
+      // Reload document to get updated versions
+      const documentData = await getDocumentById(doc.id)
+      setDoc(documentData)
+      setShowVersionModal(false)
+      setVersionNotes('')
+      
+      // Update next version number
+      const versionNum = parseInt(newVersion.replace('v', '').split('.')[0]) + 1
+      setNewVersion(`v${versionNum}.0`)
+    } catch (err) {
+      setError('Failed to create version: ' + (err as Error).message)
+      console.error('Error creating version:', err)
+    } finally {
+      setCreatingVersion(false)
+    }
+  }
+
+  const handleSubmitForApproval = async () => {
+    if (!doc || !user) return
+    try {
+      setSubmitting(true)
+      await submitForApproval(doc.id)
+      await logActivity({
+        user_id: user.id,
+        action: 'edit',
+        target_type: 'document',
+        target_id: doc.id,
+        target_title: doc.title,
+        target_code: doc.code,
+        details: `Submitted for approval: ${doc.title}`,
+      })
+      const updated = await getDocumentById(doc.id)
+      setDoc(updated)
+    } catch (err) {
+      setError('Failed to submit for approval: ' + (err as Error).message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+        <span className="ml-3 text-sm text-slate-500">Loading document...</span>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <AlertCircle className="w-16 h-16 text-red-200 mb-4" />
+        <h2 className="text-xl font-bold text-slate-900 mb-2">Error Loading Document</h2>
+        <p className="text-slate-500 mb-4">{error}</p>
+        <button
+          onClick={() => navigate('/documents')}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          Back to Documents
+        </button>
+      </div>
+    )
+  }
 
   if (!doc) {
     return (
@@ -76,7 +189,7 @@ export function DocumentDetail() {
                 {doc.status}
               </span>
             </div>
-            <p className="text-sm text-slate-500">{doc.code} · {doc.type}</p>
+            <p className="text-sm text-slate-500">{doc.code} · {doc.type} · Version {doc.version}</p>
           </div>
         </div>
 
@@ -88,7 +201,33 @@ export function DocumentDetail() {
             <Pencil className="w-3.5 h-3.5" />
             Edit
           </button>
-          <button className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
+          {(doc.status === 'Draft' || doc.status === 'Rejected') && (
+            <button
+              onClick={handleSubmitForApproval}
+              disabled={submitting}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
+            >
+              {submitting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5" />
+              )}
+              Submit for Review
+            </button>
+          )}
+          <button onClick={() => {
+            if (!doc) return
+            const content = `${doc.title}\n${doc.code}\n\nDescription:\n${doc.description || ''}\n\nContent:\n${doc.content || ''}\n\nVersion: ${doc.version}\nStatus: ${doc.status}\nOwner: ${doc.users?.name || 'Unknown'}\nCreated: ${new Date(doc.created_at).toLocaleDateString()}\nUpdated: ${new Date(doc.updated_at).toLocaleDateString()}`
+            const blob = new Blob([content], { type: 'text/plain' })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `${doc.code.replace(/\s+/g, '_')}_${doc.version}.txt`
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+            URL.revokeObjectURL(url)
+          }} className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
             <Download className="w-3.5 h-3.5" />
             Download
           </button>
@@ -113,10 +252,10 @@ export function DocumentDetail() {
                 <div>
                   <p className="text-xs text-slate-400 mb-0.5">Owner</p>
                   <div className="flex items-center gap-2">
-                    <div className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${doc.ownerColor}`}>
-                      {doc.ownerInitials}
+                    <div className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${doc.users?.avatar_color || 'bg-slate-100 text-slate-600'}`}>
+                      {doc.users?.initials || doc.users?.name?.split(' ').map(n => n[0]).join('') || 'U'}
                     </div>
-                    <p className="text-sm font-medium text-slate-900">{doc.owner}</p>
+                    <p className="text-sm font-medium text-slate-900">{doc.users?.name || 'Unknown'}</p>
                   </div>
                 </div>
               </div>
@@ -137,7 +276,7 @@ export function DocumentDetail() {
                 </div>
                 <div>
                   <p className="text-xs text-slate-400 mb-0.5">Created</p>
-                  <p className="text-sm font-medium text-slate-900">{doc.createdAt}</p>
+                  <p className="text-sm font-medium text-slate-900">{new Date(doc.created_at).toLocaleDateString()}</p>
                 </div>
               </div>
 
@@ -147,20 +286,20 @@ export function DocumentDetail() {
                 </div>
                 <div>
                   <p className="text-xs text-slate-400 mb-0.5">Last Updated</p>
-                  <p className="text-sm font-medium text-slate-900">{doc.updatedAt}</p>
+                  <p className="text-sm font-medium text-slate-900">{new Date(doc.updated_at).toLocaleDateString()}</p>
                 </div>
               </div>
             </div>
 
             {/* tags */}
-            {doc.tags.length > 0 && (
+            {doc.tags && doc.tags.length > 0 && (
               <div className="mt-4 pt-4 border-t border-slate-100">
                 <div className="flex items-center gap-2 mb-2">
                   <Tag className="w-3.5 h-3.5 text-slate-400" />
                   <p className="text-xs font-semibold text-slate-400 uppercase">Tags</p>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {doc.tags.map(tag => (
+                  {doc.tags.map((tag: string) => (
                     <span key={tag} className="text-xs font-medium px-2 py-1 bg-slate-100 text-slate-600 rounded">
                       {tag}
                     </span>
@@ -191,23 +330,42 @@ export function DocumentDetail() {
         <div className="space-y-5">
           {/* version history */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <h2 className="text-sm font-semibold text-slate-900 mb-4">Version History</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold text-slate-900">Version History</h2>
+              <button
+                onClick={() => setShowVersionModal(true)}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+              >
+                <Plus className="w-3 h-3" />
+                New Version
+              </button>
+            </div>
             <div className="space-y-3">
-              {doc.versions.map((v, i) => (
-                <div key={i} className="flex items-start gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0">
-                  <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0">
-                    <GitBranch className="w-3 h-3" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-sm font-semibold text-slate-900">{v.version}</p>
-                      <p className="text-xs text-slate-400">{v.date}</p>
+              {doc.versions && doc.versions.length > 0 ? (
+                doc.versions.map((v: any, index: number) => {
+                  const isCurrentVersion = v.version === doc.version
+                  return (
+                    <div key={v.id} className={`flex items-start gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0 ${isCurrentVersion ? 'bg-blue-50/50 -mx-2 px-2 rounded' : ''}`}>
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${isCurrentVersion ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-600'}`}>
+                        <GitBranch className="w-3 h-3" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                            {v.version}
+                            {isCurrentVersion && <span className="text-[10px] font-medium px-1.5 py-0.5 bg-blue-600 text-white rounded">Current</span>}
+                          </p>
+                          <p className="text-xs text-slate-400">{new Date(v.created_at).toLocaleDateString()}</p>
+                        </div>
+                        <p className="text-xs text-slate-600 mb-1">{v.notes || 'No notes'}</p>
+                        <p className="text-xs text-slate-400">Created by {v.author_id === user?.id ? 'you' : (v.users?.name || v.author_id?.slice(0, 8) || 'unknown')}</p>
+                      </div>
                     </div>
-                    <p className="text-xs text-slate-600 mb-1">{v.notes}</p>
-                    <p className="text-xs text-slate-400">by {v.author}</p>
-                  </div>
-                </div>
-              ))}
+                  )
+                })
+              ) : (
+                <p className="text-xs text-slate-400 text-center py-4">No version history yet</p>
+              )}
             </div>
           </div>
 
@@ -215,46 +373,45 @@ export function DocumentDetail() {
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="text-sm font-semibold text-slate-900 mb-4">Approval Chain</h2>
             <div className="space-y-3">
-              {doc.approvalChain.map((a, i) => {
-                const isApproved = a.status === 'Approved'
-                const isPending = a.status === 'Pending'
-                const isRejected = a.status === 'Rejected'
-                const isNotStarted = a.status === 'Not Started'
+              {doc.approvals && doc.approvals.length > 0 ? (
+                doc.approvals.map((a: any) => {
+                  const isApproved = a.status === 'Approved'
+                  const isPending = a.status === 'Pending'
+                  const isRejected = a.status === 'Rejected'
+                  const isNotStarted = a.status === 'Not Started'
 
-                return (
-                  <div key={i} className="flex items-start gap-3">
-                    <div
-                      className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
-                        isApproved
-                          ? 'bg-green-100 text-green-600'
-                          : isPending
-                          ? 'bg-amber-100 text-amber-600'
-                          : isRejected
-                          ? 'bg-red-100 text-red-600'
-                          : 'bg-slate-100 text-slate-400'
-                      }`}
-                    >
-                      {isApproved && <CheckCircle2 className="w-3.5 h-3.5" />}
-                      {isPending && <Clock className="w-3.5 h-3.5" />}
-                      {isRejected && <XCircle className="w-3.5 h-3.5" />}
+                  return (
+                    <div key={a.id} className="flex items-start gap-3">
+                      <div
+                        className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          isApproved
+                            ? 'bg-green-100 text-green-600'
+                            : isPending
+                            ? 'bg-amber-100 text-amber-600'
+                            : isRejected
+                            ? 'bg-red-100 text-red-600'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        {isApproved && <CheckCircle2 className="w-3.5 h-3.5" />}
+                        {isPending && <Clock className="w-3.5 h-3.5" />}
+                        {isRejected && <XCircle className="w-3.5 h-3.5" />}
                       {isNotStarted && <CircleDashed className="w-3.5 h-3.5" />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold text-slate-900 mb-0.5">{a.step}</p>
-                      <div className="flex items-center gap-1.5 mb-1">
-                        <div className={`w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center ${a.approverColor}`}>
-                          {a.approverInitials}
-                        </div>
-                        <p className="text-xs text-slate-600">{a.approver}</p>
-                      </div>
-                      {a.date && <p className="text-xs text-slate-400">{a.date}</p>}
+                      <p className="text-xs text-slate-600">Approval step</p>
+                      {a.date && <p className="text-xs text-slate-400">{new Date(a.date).toLocaleDateString()}</p>}
                       {a.notes && (
                         <p className="text-xs text-slate-500 mt-1 italic">"{a.notes}"</p>
                       )}
                     </div>
                   </div>
                 )
-              })}
+              })
+              ) : (
+                <p className="text-xs text-slate-400 text-center py-4">No approval chain yet</p>
+              )}
             </div>
           </div>
 
@@ -262,22 +419,117 @@ export function DocumentDetail() {
           <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-700 mb-3 uppercase">Quick Actions</h3>
             <div className="space-y-2">
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white rounded-lg transition-colors">
-                <MoreHorizontal className="w-3.5 h-3.5" />
+              <button
+                onClick={() => navigate('/activity-logs')}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white rounded-lg transition-colors"
+              >
+                <Activity className="w-3.5 h-3.5" />
                 View Activity Log
               </button>
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white rounded-lg transition-colors">
-                <MoreHorizontal className="w-3.5 h-3.5" />
-                Export as PDF
+              <button
+                onClick={() => {
+                  if (!doc) return
+                  const content = `${doc.title}\n${doc.code}\nVersion: ${doc.version}\nStatus: ${doc.status}\n\nDescription:\n${doc.description || ''}\n\nContent:\n${doc.content || ''}`
+                  const blob = new Blob([content], { type: 'text/plain' })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `${doc.code.replace(/\s+/g, '_')}_${doc.version}.txt`
+                  document.body.appendChild(a)
+                  a.click()
+                  document.body.removeChild(a)
+                  URL.revokeObjectURL(url)
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white rounded-lg transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export as Text
               </button>
-              <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white rounded-lg transition-colors">
-                <MoreHorizontal className="w-3.5 h-3.5" />
+              <button
+                onClick={() => setShowVersionModal(true)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white rounded-lg transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
                 Create New Version
               </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Create Version Modal */}
+      {showVersionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowVersionModal(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Create New Version</h3>
+                <p className="text-sm text-slate-500 mt-1">Create a new version of this document</p>
+              </div>
+              <button
+                onClick={() => setShowVersionModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Version Number
+                </label>
+                <input
+                  type="text"
+                  value={newVersion}
+                  onChange={e => setNewVersion(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Version Notes
+                </label>
+                <textarea
+                  rows={3}
+                  value={versionNotes}
+                  onChange={e => setVersionNotes(e.target.value)}
+                  placeholder="Describe the changes in this version..."
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 mt-6">
+              <button
+                onClick={() => setShowVersionModal(false)}
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateVersion}
+                disabled={creatingVersion}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+              >
+                {creatingVersion ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-3.5 h-3.5" />
+                    Create Version
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

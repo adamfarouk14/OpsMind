@@ -1,3 +1,6 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import { 
   FileText, 
   Clock, 
@@ -13,65 +16,12 @@ import {
   RefreshCw,
   Filter,
   ArrowRight,
-  Zap
+  Zap,
+  Loader2
 } from 'lucide-react'
-
-// metric cards
-const metrics = [
-  {
-    title: 'TOTAL DOCUMENTS',
-    value: '1,284',
-    badge: '+38 added this month',
-    badgeColor: 'text-green-600 bg-green-50',
-    sub: ['432 SOPs', '528 Tech Docs', '254 Cases'],
-    icon: FileText,
-    iconBg: 'bg-blue-50',
-    iconColor: 'text-blue-600',
-    accent: 'border-t-blue-500',
-  },
-  {
-    title: 'PENDING APPROVALS',
-    value: '8',
-    badge: null,
-    sub: ['5 POS SOPs', '3 Device Guides', 'Awaiting supervisor…', 'Review queue'],
-    icon: Clock,
-    iconBg: 'bg-orange-50',
-    iconColor: 'text-orange-500',
-    accent: 'border-t-orange-500',
-    subBadges: [
-      { label: '5 POS SOPs', color: 'bg-orange-100 text-orange-700' },
-      { label: '3 Device Guides', color: 'bg-slate-100 text-slate-600' },
-    ],
-  },
-  {
-    title: 'DOCUMENTS BY TYPE',
-    value: '4 Types',
-    badge: null,
-    sub: ['432 SOPs', '528 Tech Docs', '130 Org Docs'],
-    icon: FolderKanban,
-    iconBg: 'bg-teal-50',
-    iconColor: 'text-teal-600',
-    accent: 'border-t-teal-500',
-    bar: [
-      { label: 'SOPs', pct: 34, color: 'bg-blue-500' },
-      { label: 'Tech', pct: 41, color: 'bg-teal-500' },
-      { label: 'Org', pct: 10, color: 'bg-slate-300' },
-      { label: 'Other', pct: 15, color: 'bg-purple-400' },
-    ],
-  },
-  {
-    title: 'DOCUMENT REVISIONS',
-    value: '96',
-    badge: 'Active cadence',
-    badgeColor: 'text-green-600 bg-green-50',
-    sub: ['Across all support', 'teams', '100% current'],
-    icon: GitBranch,
-    iconBg: 'bg-purple-50',
-    iconColor: 'text-purple-600',
-    accent: 'border-t-purple-500',
-    published: 'published this month',
-  },
-]
+import { getDocuments } from '../services/documents'
+import { getPendingApprovals } from '../services/approvals'
+import { getActivityLogs } from '../services/activityLogs'
 
 
 
@@ -101,6 +51,7 @@ const quickActions = [
     icon: FilePlus,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-600',
+    href: '/documents/create',
   },
   {
     name: 'New Technical Document',
@@ -108,6 +59,7 @@ const quickActions = [
     icon: FileText,
     iconBg: 'bg-teal-50',
     iconColor: 'text-teal-600',
+    href: '/documents/create',
   },
   {
     name: 'Log Operational Case',
@@ -115,13 +67,15 @@ const quickActions = [
     icon: AlertCircle,
     iconBg: 'bg-orange-50',
     iconColor: 'text-orange-500',
+    href: '/documents/create',
   },
   {
-    name: 'Submit for Approval',
-    desc: 'Start document review workflow',
+    name: 'Browse Documents',
+    desc: 'View all knowledge base documents',
     icon: CheckCircle,
     iconBg: 'bg-green-50',
     iconColor: 'text-green-600',
+    href: '/documents',
   },
 ]
 
@@ -237,6 +191,134 @@ const documents = [
 ]
 
 export function Dashboard() {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  const [loading, setLoading] = useState(true)
+  const [documents, setDocuments] = useState<any[]>([])
+  const [pendingApprovals, setPendingApprovals] = useState<any[]>([])
+  const [activityLogs, setActivityLogs] = useState<any[]>([])
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [docs, approvals, logs] = await Promise.all([
+          getDocuments(),
+          getPendingApprovals(),
+          getActivityLogs(5),
+        ])
+        setDocuments(docs)
+        setPendingApprovals(approvals)
+        setActivityLogs(logs)
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadData()
+  }, [])
+
+  const metrics = [
+    {
+      title: 'TOTAL DOCUMENTS',
+      value: documents.length.toString(),
+      badge: `${documents.length} documents in system`,
+      badgeColor: 'text-green-600 bg-green-50',
+      sub: [
+        `${documents.filter(d => d.type === 'SOP').length} SOPs`,
+        `${documents.filter(d => d.type === 'Technical Document').length} Tech Docs`,
+        `${documents.filter(d => d.type === 'Operational Case').length} Cases`,
+      ],
+      icon: FileText,
+      iconBg: 'bg-blue-50',
+      iconColor: 'text-blue-600',
+      accent: 'border-t-blue-500',
+    },
+    {
+      title: 'PENDING APPROVALS',
+      value: pendingApprovals.length.toString(),
+      badge: null,
+      sub: pendingApprovals.slice(0, 2).map(d => d.title),
+      icon: Clock,
+      iconBg: 'bg-orange-50',
+      iconColor: 'text-orange-500',
+      accent: 'border-t-orange-500',
+      subBadges: pendingApprovals.slice(0, 2).map(d => ({
+        label: d.code,
+        color: 'bg-orange-100 text-orange-700',
+      })),
+    },
+    {
+      title: 'DOCUMENTS BY TYPE',
+      value: '4 Types',
+      badge: null,
+      sub: [
+        `${documents.filter(d => d.type === 'SOP').length} SOPs`,
+        `${documents.filter(d => d.type === 'Technical Document').length} Tech Docs`,
+        `${documents.filter(d => d.type === 'Org Info').length} Org Docs`,
+      ],
+      icon: FolderKanban,
+      iconBg: 'bg-teal-50',
+      iconColor: 'text-teal-600',
+      accent: 'border-t-teal-500',
+      bar: [
+        { label: 'SOPs', pct: documents.length > 0 ? Math.round((documents.filter(d => d.type === 'SOP').length / documents.length) * 100) : 0, color: 'bg-blue-500' },
+        { label: 'Tech', pct: documents.length > 0 ? Math.round((documents.filter(d => d.type === 'Technical Document').length / documents.length) * 100) : 0, color: 'bg-teal-500' },
+        { label: 'Org', pct: documents.length > 0 ? Math.round((documents.filter(d => d.type === 'Org Info').length / documents.length) * 100) : 0, color: 'bg-slate-300' },
+        { label: 'Other', pct: documents.length > 0 ? Math.round((documents.filter(d => d.type === 'Operational Case').length / documents.length) * 100) : 0, color: 'bg-purple-400' },
+      ],
+    },
+    {
+      title: 'DOCUMENT REVISIONS',
+      value: '0',
+      badge: 'Active cadence',
+      badgeColor: 'text-green-600 bg-green-50',
+      sub: ['Across all support', 'teams', '100% current'],
+      icon: GitBranch,
+      iconBg: 'bg-purple-50',
+      iconColor: 'text-purple-600',
+      accent: 'border-t-purple-500',
+      published: 'published this month',
+    },
+  ]
+
+  const recentActivity = activityLogs.map(log => ({
+    id: log.id,
+    user: log.users?.name || 'Unknown',
+    action: log.action,
+    doc: log.target_title || log.target_code || '',
+    time: new Date(log.created_at).toLocaleString(),
+    dot: 'bg-blue-500',
+    initials: log.users?.initials || 'U',
+    avatarBg: log.users?.avatar_color || 'bg-slate-100 text-slate-600',
+  }))
+
+  const recentDocuments = documents.slice(0, 4).map(doc => ({
+    id: doc.id,
+    title: doc.title,
+    code: `${doc.code} • ${doc.description?.slice(0, 30) || ''}`,
+    type: doc.type,
+    typeColor: doc.type === 'SOP' ? 'bg-blue-100 text-blue-700' :
+                 doc.type === 'Technical Document' ? 'bg-teal-100 text-teal-700' :
+                 doc.type === 'Operational Case' ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600',
+    version: doc.version,
+    owner: doc.users?.name || 'Unknown',
+    ownerBg: doc.users?.avatar_color || 'bg-slate-100 text-slate-600',
+    status: doc.status,
+    statusColor: doc.status === 'Approved' ? 'bg-green-100 text-green-700' :
+                  doc.status === 'In Review' ? 'bg-amber-100 text-amber-700' :
+                  doc.status === 'Draft' ? 'bg-slate-100 text-slate-600' : 'bg-red-100 text-red-700',
+  }))
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+        <span className="ml-3 text-sm text-slate-500">Loading dashboard...</span>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-5">
 
@@ -245,25 +327,25 @@ export function Dashboard() {
       {/* welcome + top ctas */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Welcome back, Youssef Hussein</h1>
+          <h1 className="text-xl font-bold text-slate-900">Welcome back, {user?.name || 'there'}</h1>
           <div className="flex items-center flex-wrap gap-1.5 mt-1 text-[13px] text-slate-500">
             <button className="text-blue-600 hover:underline font-medium">Technical Support Knowledge Base</button>
             <ChevronRight className="w-3.5 h-3.5" />
             <button className="text-blue-600 hover:underline font-medium">POS & Device Support Resources</button>
             <ChevronRight className="w-3.5 h-3.5" />
           </div>
-          <p className="text-[12px] text-slate-400 mt-0.5">1,284 Active Documents</p>
+          <p className="text-[12px] text-slate-400 mt-0.5">{documents.length} Active Documents</p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1.5 px-3 py-2 text-[13px] border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
+          <button onClick={() => navigate('/search')} className="flex items-center gap-1.5 px-3 py-2 text-[13px] border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
             <Search className="w-3.5 h-3.5" />
             Search Knowledge
           </button>
-          <button className="flex items-center gap-1.5 px-3 py-2 text-[13px] border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
+          <button onClick={() => navigate('/ai-knowledge')} className="flex items-center gap-1.5 px-3 py-2 text-[13px] border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
             <Sparkles className="w-3.5 h-3.5 text-blue-500" />
             Ask AI
           </button>
-          <button className="flex items-center gap-1.5 px-3 py-2 text-[13px] bg-blue-600 hover:bg-blue-700 rounded-lg font-medium text-white transition-colors">
+          <button onClick={() => navigate('/documents/create')} className="flex items-center gap-1.5 px-3 py-2 text-[13px] bg-blue-600 hover:bg-blue-700 rounded-lg font-medium text-white transition-colors">
             <Plus className="w-3.5 h-3.5" />
             New Document
           </button>
@@ -414,6 +496,7 @@ export function Dashboard() {
               return (
                 <button
                   key={a.name}
+                  onClick={() => navigate(a.href)}
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border border-slate-100 hover:border-blue-200 hover:bg-blue-50/40 transition-all text-left group"
                 >
                   <div className={`w-8 h-8 rounded-lg ${a.iconBg} flex items-center justify-center flex-shrink-0`}>
@@ -459,7 +542,7 @@ export function Dashboard() {
               <button className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded transition-colors">
                 <Filter className="w-3.5 h-3.5" />
               </button>
-              <span className="text-[11px] text-slate-400">Showing 4 of 1,284 documents</span>
+              <span className="text-[11px] text-slate-400">Showing {recentDocuments.length} of {documents.length} documents</span>
             </div>
           </div>
 
@@ -475,8 +558,8 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {documents.map((doc) => (
-                  <tr key={doc.id} className="border-b border-slate-50 hover:bg-slate-50/70 cursor-pointer group">
+                {recentDocuments.map((doc) => (
+                  <tr key={doc.id} onClick={() => navigate(`/documents/${doc.id}`)} className="border-b border-slate-50 hover:bg-slate-50/70 cursor-pointer group">
                     <td className="py-3 px-5">
                       <p className="text-[13px] font-semibold text-blue-600 group-hover:underline leading-tight">{doc.title}</p>
                       <p className="text-[11px] text-slate-400 mt-0.5 leading-tight">{doc.code}</p>
@@ -503,8 +586,8 @@ export function Dashboard() {
           </div>
 
           <div className="px-5 py-3 flex items-center justify-between border-t border-slate-100">
-            <span className="text-[11px] text-slate-400">Showing 1 to 4 of 1,284 entries</span>
-            <button className="flex items-center gap-1 text-[12px] text-blue-600 hover:underline font-medium">
+            <span className="text-[11px] text-slate-400">Showing 1 to {recentDocuments.length} of {documents.length} entries</span>
+            <button onClick={() => navigate('/documents')} className="flex items-center gap-1 text-[12px] text-blue-600 hover:underline font-medium">
               Browse all documents <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -540,7 +623,7 @@ export function Dashboard() {
           </div>
 
           <div className="pt-3 border-t border-slate-100 mt-3">
-            <button className="flex items-center gap-1 text-[12px] text-blue-600 hover:underline font-medium">
+            <button onClick={() => navigate('/activity-logs')} className="flex items-center gap-1 text-[12px] text-blue-600 hover:underline font-medium">
               View full activity log <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>

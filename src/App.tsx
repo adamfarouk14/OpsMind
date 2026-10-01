@@ -1,5 +1,8 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Layout } from './components/layout/Layout'
+import { ProtectedRoute } from './components/ProtectedRoute'
+import { Login } from './pages/Login'
+import { Profile } from './pages/Profile'
 import { Dashboard } from './pages/Dashboard'
 import { Documents } from './pages/Documents'
 import { CreateDocument } from './pages/CreateDocument'
@@ -16,8 +19,14 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Layout />}>
+        <Route path="/login" element={<Login />} />
+        <Route path="/" element={
+          <ProtectedRoute>
+            <Layout />
+          </ProtectedRoute>
+        }>
           <Route index element={<Dashboard />} />
+          <Route path="dashboard" element={<Dashboard />} />
           <Route path="documents" element={<Documents />} />
           <Route path="documents/create" element={<CreateDocument />} />
           <Route path="documents/:id" element={<DocumentDetail />} />
@@ -27,7 +36,12 @@ function App() {
           <Route path="approvals" element={<Approvals />} />
           <Route path="reports" element={<Reports />} />
           <Route path="activity-logs" element={<ActivityLogs />} />
-          <Route path="administration" element={<Administration />} />
+          <Route path="administration" element={
+            <ProtectedRoute requiredRole="Admin">
+              <Administration />
+            </ProtectedRoute>
+          } />
+          <Route path="profile" element={<Profile />} />
         </Route>
       </Routes>
     </BrowserRouter>

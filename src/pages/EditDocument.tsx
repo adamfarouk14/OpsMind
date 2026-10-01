@@ -1,25 +1,57 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById, type DocType, type Document } from '../data/documents'
-import { ArrowLeft, Save, X, AlertCircle, ChevronDown, GitBranch } from 'lucide-react'
+import type { DocType } from '../types/database'
+import { getDocumentById, updateDocument, createDocumentVersion } from '../services/documents'
+import { logActivity } from '../services/activityLogs'
+import { useAuth } from '../contexts/AuthContext'
+import { ArrowLeft, Save, X, AlertCircle, ChevronDown, GitBranch, Loader2 } from 'lucide-react'
 
 export function EditDocument() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const doc = getDocumentById(Number(id))
+  const { user } = useAuth()
+  const [doc, setDoc] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   const [form, setForm] = useState({
-    title: doc?.title || '',
-    code: doc?.code || '',
-    type: (doc?.type || 'SOP') as DocType,
-    description: doc?.description || '',
-    content: doc?.content || '',
-    tags: doc?.tags.join(', ') || '',
+    title: '',
+    code: '',
+    type: 'SOP' as DocType,
+    description: '',
+    content: '',
+    tags: '',
     versionNotes: '',
   })
 
   const [showDiscardModal, setShowDiscardModal] = useState(false)
   const [createNewVersion, setCreateNewVersion] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        if (!id) return
+        const documentData = await getDocumentById(id)
+        setDoc(documentData)
+        setForm({
+          title: documentData.title || '',
+          code: documentData.code || '',
+          type: documentData.type || 'SOP',
+          description: documentData.description || '',
+          content: documentData.content || '',
+          tags: documentData.tags?.join(', ') || '',
+          versionNotes: '',
+        })
+      } catch (err) {
+        setError('Failed to load document: ' + (err as Error).message)
+        console.error('Error loading document:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadData()
+  }, [id])
 
   const incrementVersion = (currentVersion: string): string => {
     const match = currentVersion.match(/v(\d+)\.(\d+)/)
@@ -29,6 +61,31 @@ export function EditDocument() {
       return `v${major}.${minor + 1}`
     }
     return 'v1.1'
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+        <span className="ml-3 text-sm text-slate-500">Loading document...</span>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <AlertCircle className="w-16 h-16 text-red-200 mb-4" />
+        <h2 className="text-xl font-bold text-slate-900 mb-2">Error Loading Document</h2>
+        <p className="text-slate-500 mb-4">{error}</p>
+        <button
+          onClick={() => navigate('/documents')}
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+        >
+          Back to Documents
+        </button>
+      </div>
+    )
   }
 
   if (!doc) {
@@ -47,27 +104,56 @@ export function EditDocument() {
     )
   }
 
-  const handleSave = () => {
-    const newVersion = createNewVersion ? incrementVersion(doc.version) : doc.version
-    const tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t)
-
-    if (createNewVersion && form.versionNotes.trim()) {
-      const newVersionEntry = {
-        version: newVersion,
-        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-        author: 'Current User',
-        notes: form.versionNotes,
-      }
-      console.log('Creating new version:', newVersionEntry)
+  const handleSave = async () => {
+    if (!doc || !user) {
+      setError('Cannot save: not authenticated')
+      return
     }
 
-    console.log('Saving document:', {
-      ...form,
-      version: newVersion,
-      tags: tagsArray,
-      createNewVersion,
-    })
-    navigate(`/documents/${doc.id}`)
+    try {
+      setSaving(true)
+      setError(null)
+
+      const newVersion = createNewVersion ? incrementVersion(doc.version) : doc.version
+      const tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t)
+
+      if (createNewVersion && form.versionNotes.trim()) {
+        await createDocumentVersion(doc.id, {
+          version: newVersion,
+          author_id: user.id,
+          notes: form.versionNotes,
+        })
+      }
+
+      await updateDocument(doc.id, {
+        title: form.title,
+        code: form.code,
+        type: form.type,
+        version: newVersion,
+        description: form.description,
+        content: form.content,
+        tags: tagsArray,
+      })
+
+      await logActivity({
+        user_id: user.id,
+        action: 'edit',
+        target_type: 'document',
+        target_id: doc.id,
+        target_title: form.title,
+        target_code: form.code,
+        details: createNewVersion
+          ? `Updated document to ${newVersion}: ${form.versionNotes}`
+          : `Edited document: ${form.title}`,
+      })
+
+      navigate(`/documents/${doc.id}`)
+    } catch (err) {
+      setError('Failed to save document: ' + (err as Error).message)
+      console.error('Error saving document:', err)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleDiscard = () => {
@@ -108,6 +194,11 @@ export function EditDocument() {
       )}
 
       <div className="space-y-5">
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        )}
         {/* header */}
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -133,11 +224,20 @@ export function EditDocument() {
             </button>
             <button
               onClick={handleSave}
-              disabled={createNewVersion && !form.versionNotes.trim()}
+              disabled={saving || (createNewVersion && !form.versionNotes.trim())}
               className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
             >
-              <Save className="w-3.5 h-3.5" />
-              {createNewVersion ? `Save as ${incrementVersion(doc.version)}` : 'Save Changes'}
+              {saving ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="w-3.5 h-3.5" />
+                  {createNewVersion ? `Save as ${incrementVersion(doc.version)}` : 'Save Changes'}
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -257,7 +357,7 @@ export function EditDocument() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-xs text-slate-500">Owner</span>
-                  <span className="text-sm font-medium text-slate-900">{doc.owner}</span>
+                  <span className="text-sm font-medium text-slate-900">{doc.users?.name || 'Unknown'}</span>
                 </div>
               </div>
             </div>

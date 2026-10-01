@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { mockDocuments } from '../data/documents'
-import type { DocType, DocStatus } from '../data/documents'
+import { useState, useEffect } from 'react'
+import { getDocuments } from '../services/documents'
+import type { DocType, DocStatus } from '../types/database'
 import {
   FileText,
   TrendingUp,
@@ -13,25 +13,57 @@ import {
   ChevronDown,
   BarChart3,
   PieChart,
+  Loader2,
 } from 'lucide-react'
 
 export function Reports() {
   const [dateRange, setDateRange] = useState<'30D' | '90D' | '1Y'>('30D')
   const [activeReport, setActiveReport] = useState<'overview' | 'by-type' | 'approvals' | 'activity'>('overview')
+  const [documents, setDocuments] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    async function loadDocuments() {
+      try {
+        const data = await getDocuments()
+        setDocuments(data)
+      } catch (err) {
+        setError('Failed to load documents: ' + (err as Error).message)
+        console.error('Error loading documents:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadDocuments()
+  }, [])
+
+  const getDateCutoff = (range: '30D' | '90D' | '1Y'): Date => {
+    const now = new Date()
+    if (range === '30D') now.setDate(now.getDate() - 30)
+    else if (range === '90D') now.setDate(now.getDate() - 90)
+    else now.setFullYear(now.getFullYear() - 1)
+    return now
+  }
+
+  const filteredDocuments = documents.filter(d => {
+    const cutoff = getDateCutoff(dateRange)
+    return new Date(d.created_at) >= cutoff
+  })
 
   const stats = {
-    totalDocs: mockDocuments.length,
-    approvedDocs: mockDocuments.filter(d => d.status === 'Approved').length,
-    inReviewDocs: mockDocuments.filter(d => d.status === 'In Review').length,
-    draftDocs: mockDocuments.filter(d => d.status === 'Draft').length,
-    rejectedDocs: mockDocuments.filter(d => d.status === 'Rejected').length,
+    totalDocs: filteredDocuments.length,
+    approvedDocs: filteredDocuments.filter(d => d.status === 'Approved').length,
+    inReviewDocs: filteredDocuments.filter(d => d.status === 'In Review').length,
+    draftDocs: filteredDocuments.filter(d => d.status === 'Draft').length,
+    rejectedDocs: filteredDocuments.filter(d => d.status === 'Rejected').length,
   }
 
   const docsByType = [
-    { type: 'SOP', count: mockDocuments.filter(d => d.type === 'SOP').length, color: 'bg-blue-500' },
-    { type: 'Technical Document', count: mockDocuments.filter(d => d.type === 'Technical Document').length, color: 'bg-teal-500' },
-    { type: 'Operational Case', count: mockDocuments.filter(d => d.type === 'Operational Case').length, color: 'bg-orange-500' },
-    { type: 'Org Info', count: mockDocuments.filter(d => d.type === 'Org Info').length, color: 'bg-slate-400' },
+    { type: 'SOP', count: filteredDocuments.filter(d => d.type === 'SOP').length, color: 'bg-blue-500' },
+    { type: 'Technical Document', count: filteredDocuments.filter(d => d.type === 'Technical Document').length, color: 'bg-teal-500' },
+    { type: 'Operational Case', count: filteredDocuments.filter(d => d.type === 'Operational Case').length, color: 'bg-orange-500' },
+    { type: 'Org Info', count: filteredDocuments.filter(d => d.type === 'Org Info').length, color: 'bg-slate-400' },
   ]
 
   const recentActivity = [
@@ -49,6 +81,21 @@ export function Reports() {
 
   return (
     <div className="space-y-5">
+      {loading && (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+          <span className="ml-3 text-sm text-slate-500">Loading reports...</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm text-red-700">{error}</p>
+        </div>
+      )}
+
+      {!loading && !error && (
+        <>
       {/* header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -124,7 +171,7 @@ export function Reports() {
             </div>
             <span className="text-xs text-green-600 font-medium">+15%</span>
           </div>
-          <p className="text-2xl font-bold text-slate-900">{stats.approvedDocs / stats.totalDocs * 100}%</p>
+          <p className="text-2xl font-bold text-slate-900">{stats.totalDocs > 0 ? ((stats.approvedDocs / stats.totalDocs) * 100).toFixed(1) : 0}%</p>
           <p className="text-xs text-slate-500 mt-1">Approval Rate</p>
         </div>
       </div>
@@ -240,7 +287,7 @@ export function Reports() {
               <span className="text-xs font-semibold text-green-700">Approved</span>
             </div>
             <p className="text-2xl font-bold text-green-900">{stats.approvedDocs}</p>
-            <p className="text-xs text-green-600 mt-1">{((stats.approvedDocs / stats.totalDocs) * 100).toFixed(1)}% of total</p>
+            <p className="text-xs text-green-600 mt-1">{stats.totalDocs > 0 ? ((stats.approvedDocs / stats.totalDocs) * 100).toFixed(1) : 0}% of total</p>
           </div>
 
           <div className="p-4 bg-amber-50 rounded-lg border border-amber-100">
@@ -249,7 +296,7 @@ export function Reports() {
               <span className="text-xs font-semibold text-amber-700">In Review</span>
             </div>
             <p className="text-2xl font-bold text-amber-900">{stats.inReviewDocs}</p>
-            <p className="text-xs text-amber-600 mt-1">{((stats.inReviewDocs / stats.totalDocs) * 100).toFixed(1)}% of total</p>
+            <p className="text-xs text-amber-600 mt-1">{stats.totalDocs > 0 ? ((stats.inReviewDocs / stats.totalDocs) * 100).toFixed(1) : 0}% of total</p>
           </div>
 
           <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
@@ -258,7 +305,7 @@ export function Reports() {
               <span className="text-xs font-semibold text-slate-700">Draft</span>
             </div>
             <p className="text-2xl font-bold text-slate-900">{stats.draftDocs}</p>
-            <p className="text-xs text-slate-600 mt-1">{((stats.draftDocs / stats.totalDocs) * 100).toFixed(1)}% of total</p>
+            <p className="text-xs text-slate-600 mt-1">{stats.totalDocs > 0 ? ((stats.draftDocs / stats.totalDocs) * 100).toFixed(1) : 0}% of total</p>
           </div>
 
           <div className="p-4 bg-red-50 rounded-lg border border-red-100">
@@ -267,7 +314,7 @@ export function Reports() {
               <span className="text-xs font-semibold text-red-700">Rejected</span>
             </div>
             <p className="text-2xl font-bold text-red-900">{stats.rejectedDocs}</p>
-            <p className="text-xs text-red-600 mt-1">{((stats.rejectedDocs / stats.totalDocs) * 100).toFixed(1)}% of total</p>
+            <p className="text-xs text-red-600 mt-1">{stats.totalDocs > 0 ? ((stats.rejectedDocs / stats.totalDocs) * 100).toFixed(1) : 0}% of total</p>
           </div>
         </div>
       </div>
@@ -295,7 +342,7 @@ export function Reports() {
               </tr>
             </thead>
             <tbody>
-              {mockDocuments.slice(0, 5).map(doc => (
+              {filteredDocuments.slice(0, 5).map(doc => (
                 <tr key={doc.id} className="border-b border-slate-50 hover:bg-slate-50">
                   <td className="py-2.5 px-3">
                     <p className="text-xs font-medium text-slate-900">{doc.title}</p>
@@ -314,13 +361,15 @@ export function Reports() {
                       {doc.status}
                     </span>
                   </td>
-                  <td className="py-2.5 px-3 text-xs text-slate-500">{doc.updatedAt}</td>
+                  <td className="py-2.5 px-3 text-xs text-slate-500">{new Date(doc.updated_at).toLocaleDateString()}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+        </>
+      )}
     </div>
   )
 }
