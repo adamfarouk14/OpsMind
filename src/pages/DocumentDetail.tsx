@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById, createDocumentVersion, getNextVersionNumber } from '../services/documents'
-import { uploadDocumentVersionFile, downloadDocumentFile } from '../services/storage'
+import { getDocumentById, createDocumentVersion } from '../services/documents'
 import { submitForApproval } from '../services/approvals'
 import { logActivity } from '../services/activityLogs'
 import type { DocStatus } from '../types/database'
@@ -28,8 +27,6 @@ import {
   Save,
   X,
   Send,
-  Upload,
-  Paperclip,
 } from 'lucide-react'
 
 const STATUS_STYLES: Record<DocStatus, string> = {
@@ -57,8 +54,6 @@ export function DocumentDetail() {
   const [newVersion, setNewVersion] = useState('')
   const [versionNotes, setVersionNotes] = useState('')
   const [creatingVersion, setCreatingVersion] = useState(false)
-  const [versionFile, setVersionFile] = useState<File | null>(null)
-  const [nextVersionNum, setNextVersionNum] = useState(1)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -67,10 +62,8 @@ export function DocumentDetail() {
         if (!id) return
         const documentData = await getDocumentById(id)
         setDoc(documentData)
-const nextNum = await getNextVersionNumber(id)
-        setNextVersionNum(nextNum)
-        setNewVersion(`v${nextNum}.0`)
         // Set next version number
+        const currentVersion = documentData.version || 'v1.0'
         const versionNum = parseInt(currentVersion.replace('v', '').split('.')[0]) + 1
         setNewVersion(`v${versionNum}.0`)
       } catch (err) {
@@ -88,37 +81,17 @@ const nextNum = await getNextVersionNumber(id)
 
     try {
       setCreatingVersion(true)
-let filePath: string | null = null
-      let fileName: string | null = null
-
-      if (versionFile) {
-        const uploadResult = await uploadDocumentVersionFile(
-          doc.id,
-          newVersion,
-          versionFile,
-          user.id
-        )
-        filePath = uploadResult.path
-        fileName = uploadResult.fileName
-      }
-
       await createDocumentVersion(doc.id, {
         version: newVersion,
         author_id: user.id,
         notes: versionNotes,
-        file_path: filePath,
-        file_name: fileName,
       })
       
       // Reload document to get updated versions
       const documentData = await getDocumentById(doc.id)
       setDoc(documentData)
-const nextNum = await getNextVersionNumber(id)
-        setNextVersionNum(nextNum)
-        setNewVersion(`v${nextNum}.0`)
       setShowVersionModal(false)
       setVersionNotes('')
-setVersionFile(null)
       
       // Update next version number
       const versionNum = parseInt(newVersion.replace('v', '').split('.')[0]) + 1
@@ -130,19 +103,6 @@ setVersionFile(null)
       setCreatingVersion(false)
     }
   }
-
-const handleDownloadVersion = async (version: any) => {
-    if (!version.file_path || !version.file_name) {
-      setError('No file attached to this version')
-      return
-    }
-    try {
-      await downloadDocumentFile(version.file_path, version.file_name)
-    } catch (err) {
-      setError('Failed to download file: ' + (err as Error).message)
-    }
-  }
-
 
   const handleSubmitForApproval = async () => {
     if (!doc || !user) return
@@ -398,22 +358,7 @@ const handleDownloadVersion = async (version: any) => {
                           <p className="text-xs text-slate-400">{new Date(v.created_at).toLocaleDateString()}</p>
                         </div>
                         <p className="text-xs text-slate-600 mb-1">{v.notes || 'No notes'}</p>
-{v.file_name && (
-                          <div className="flex items-center gap-1 mb-1">
-                            <Paperclip className="w-3 h-3 text-slate-400" />
-                            <p className="text-xs text-slate-600 truncate">{v.file_name}</p>
-                          </div>
-                        )}
                         <p className="text-xs text-slate-400">Created by {v.author_id === user?.id ? 'you' : (v.users?.name || v.author_id?.slice(0, 8) || 'unknown')}</p>
-{v.file_path && v.file_name && (
-                          <button
-                            onClick={() => handleDownloadVersion(v)}
-                            className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium"
-                          >
-                            <Download className="w-3 h-3" />
-                            Download File
-                          </button>
-                        )}
                       </div>
                     </div>
                   )
@@ -552,41 +497,6 @@ const handleDownloadVersion = async (version: any) => {
                   value={versionNotes}
                   onChange={e => setVersionNotes(e.target.value)}
                   placeholder="Describe the changes in this version..."
-<div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Attach File (Optional)
-                </label>
-                <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-slate-200 border-dashed rounded-lg hover:border-slate-300 transition-colors">
-                  <div className="space-y-1 text-center">
-                    <Upload className="mx-auto h-8 w-8 text-slate-400" />
-                    <div className="flex text-sm text-slate-600">
-                      <label htmlFor="file-upload" className="relative cursor-pointer rounded-md font-medium text-blue-600 focus-within:outline-none focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-2 hover:text-blue-500">
-                        <span>Upload a file</span>
-                        <input
-                          id="file-upload"
-                          type="file"
-                          className="sr-only"
-                          onChange={e => setVersionFile(e.target.files?.[0] || null)}
-                        />
-                      </label>
-                      <p className="pl-1">or drag and drop</p>
-                    </div>
-                    <p className="text-xs text-slate-500">PDF, DOC, DOCX, TXT up to 10MB</p>
-                    {versionFile && (
-                      <div className="mt-2 flex items-center justify-center gap-2 text-xs text-slate-600">
-                        <Paperclip className="w-3 h-3" />
-                        <span className="truncate max-w-xs">{versionFile.name}</span>
-                        <button
-                          onClick={() => setVersionFile(null)}
-                          className="text-red-500 hover:text-red-600"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                 />
               </div>
