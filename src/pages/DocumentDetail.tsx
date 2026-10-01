@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById, createDocumentVersion } from '../services/documents'
+import { getDocumentById, createDocumentVersion, getNextVersionNumber } from '../services/documents'
+import { uploadDocumentVersionFile, downloadDocumentFile } from '../services/storage'
 import { submitForApproval } from '../services/approvals'
 import { logActivity } from '../services/activityLogs'
 import type { DocStatus } from '../types/database'
@@ -9,7 +10,6 @@ import {
   ArrowLeft,
   Pencil,
   Download,
-  Share2,
   Clock,
   CheckCircle,
   AlertCircle,
@@ -27,6 +27,8 @@ import {
   Save,
   X,
   Send,
+  Upload,
+  Paperclip,
 } from 'lucide-react'
 
 const STATUS_STYLES: Record<DocStatus, string> = {
@@ -54,6 +56,8 @@ export function DocumentDetail() {
   const [newVersion, setNewVersion] = useState('')
   const [versionNotes, setVersionNotes] = useState('')
   const [creatingVersion, setCreatingVersion] = useState(false)
+  const [versionFile, setVersionFile] = useState<File | null>(null)
+  const [nextVersionNum, setNextVersionNum] = useState(1)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -62,10 +66,10 @@ export function DocumentDetail() {
         if (!id) return
         const documentData = await getDocumentById(id)
         setDoc(documentData)
-        // Set next version number
-        const currentVersion = documentData.version || 'v1.0'
-        const versionNum = parseInt(currentVersion.replace('v', '').split('.')[0]) + 1
-        setNewVersion(`v${versionNum}.0`)
+        
+        const nextNum = await getNextVersionNumber(id)
+        setNextVersionNum(nextNum)
+        setNewVersion(`v${nextNum}.0`)
       } catch (err) {
         setError('Failed to load document: ' + (err as Error).message)
         console.error('Error loading document:', err)
@@ -81,26 +85,67 @@ export function DocumentDetail() {
 
     try {
       setCreatingVersion(true)
+      setError(null)
+
+      let filePath: string | null = null
+      let fileName: string | null = null
+
+      if (versionFile) {
+        const uploadResult = await uploadDocumentVersionFile(
+          doc.id,
+          newVersion,
+          versionFile,
+          user.id
+        )
+        filePath = uploadResult.path
+        fileName = uploadResult.fileName
+      }
+
       await createDocumentVersion(doc.id, {
         version: newVersion,
         author_id: user.id,
         notes: versionNotes,
+        file_path: filePath,
+        file_name: fileName,
       })
       
-      // Reload document to get updated versions
       const documentData = await getDocumentById(doc.id)
       setDoc(documentData)
       setShowVersionModal(false)
       setVersionNotes('')
+      setVersionFile(null)
       
-      // Update next version number
-      const versionNum = parseInt(newVersion.replace('v', '').split('.')[0]) + 1
-      setNewVersion(`v${versionNum}.0`)
+      const nextNum = await getNextVersionNumber(doc.id)
+      setNextVersionNum(nextNum)
+      setNewVersion(`v${nextNum}.0`)
+
+      await logActivity({
+        user_id: user.id,
+        action: 'create',
+        target_type: 'document_version',
+        target_id: doc.id,
+        target_title: doc.title,
+        target_code: doc.code,
+        details: `Created version ${newVersion} of ${doc.title}`,
+      })
     } catch (err) {
       setError('Failed to create version: ' + (err as Error).message)
       console.error('Error creating version:', err)
     } finally {
       setCreatingVersion(false)
+    }
+  }
+
+  const handleDownloadVersion = async (version: any) => {
+    if (!version.file_path || !version.file_name) {
+      setError('No file attached to this version')
+      return
+    }
+
+    try {
+      await downloadDocumentFile(version.file_path, version.file_name)
+    } catch (err) {
+      setError('Failed to download file: ' + (err as Error).message)
     }
   }
 
@@ -172,7 +217,6 @@ export function DocumentDetail() {
 
   return (
     <div className="space-y-5">
-      {/* header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <button
@@ -189,7 +233,7 @@ export function DocumentDetail() {
                 {doc.status}
               </span>
             </div>
-            <p className="text-sm text-slate-500">{doc.code} · {doc.type} · Version {doc.version}</p>
+            <p className="text-sm text-slate-500">{doc.code} · {doc.type}</p>
           </div>
         </div>
 
@@ -208,40 +252,23 @@ export function DocumentDetail() {
               className="flex items-center gap-1.5 px-3 py-2 text-sm bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
             >
               {submitting ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Submitting...
+                </>
               ) : (
-                <Send className="w-3.5 h-3.5" />
+                <>
+                  <Send className="w-3.5 h-3.5" />
+                  Submit for Review
+                </>
               )}
-              Submit for Review
             </button>
           )}
-          <button onClick={() => {
-            if (!doc) return
-            const content = `${doc.title}\n${doc.code}\n\nDescription:\n${doc.description || ''}\n\nContent:\n${doc.content || ''}\n\nVersion: ${doc.version}\nStatus: ${doc.status}\nOwner: ${doc.users?.name || 'Unknown'}\nCreated: ${new Date(doc.created_at).toLocaleDateString()}\nUpdated: ${new Date(doc.updated_at).toLocaleDateString()}`
-            const blob = new Blob([content], { type: 'text/plain' })
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = `${doc.code.replace(/\s+/g, '_')}_${doc.version}.txt`
-            document.body.appendChild(a)
-            a.click()
-            document.body.removeChild(a)
-            URL.revokeObjectURL(url)
-          }} className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
-            <Download className="w-3.5 h-3.5" />
-            Download
-          </button>
-          <button className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
-            <Share2 className="w-3.5 h-3.5" />
-            Share
-          </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* main content */}
         <div className="lg:col-span-2 space-y-5">
-          {/* document info card */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="text-sm font-semibold text-slate-900 mb-4">Document Information</h2>
             <div className="grid grid-cols-2 gap-4">
@@ -291,7 +318,6 @@ export function DocumentDetail() {
               </div>
             </div>
 
-            {/* tags */}
             {doc.tags && doc.tags.length > 0 && (
               <div className="mt-4 pt-4 border-t border-slate-100">
                 <div className="flex items-center gap-2 mb-2">
@@ -309,13 +335,11 @@ export function DocumentDetail() {
             )}
           </div>
 
-          {/* description */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="text-sm font-semibold text-slate-900 mb-2">Description</h2>
             <p className="text-sm text-slate-600 leading-relaxed">{doc.description}</p>
           </div>
 
-          {/* content */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="text-sm font-semibold text-slate-900 mb-4">Document Content</h2>
             <div className="prose prose-sm max-w-none">
@@ -326,9 +350,7 @@ export function DocumentDetail() {
           </div>
         </div>
 
-        {/* sidebar */}
         <div className="space-y-5">
-          {/* version history */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-slate-900">Version History</h2>
@@ -357,8 +379,23 @@ export function DocumentDetail() {
                           </p>
                           <p className="text-xs text-slate-400">{new Date(v.created_at).toLocaleDateString()}</p>
                         </div>
+                        {v.file_name && (
+                          <div className="flex items-center gap-1 mb-1">
+                            <Paperclip className="w-3 h-3 text-slate-400" />
+                            <p className="text-xs text-slate-600 truncate">{v.file_name}</p>
+                          </div>
+                        )}
                         <p className="text-xs text-slate-600 mb-1">{v.notes || 'No notes'}</p>
                         <p className="text-xs text-slate-400">Created by {v.author_id === user?.id ? 'you' : (v.users?.name || v.author_id?.slice(0, 8) || 'unknown')}</p>
+                        {v.file_path && v.file_name && (
+                          <button
+                            onClick={() => handleDownloadVersion(v)}
+                            className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                          >
+                            <Download className="w-3 h-3" />
+                            Download File
+                          </button>
+                        )}
                       </div>
                     </div>
                   )
@@ -369,7 +406,6 @@ export function DocumentDetail() {
             </div>
           </div>
 
-          {/* approval chain */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="text-sm font-semibold text-slate-900 mb-4">Approval Chain</h2>
             <div className="space-y-3">
@@ -408,14 +444,13 @@ export function DocumentDetail() {
                     </div>
                   </div>
                 )
-              })
+                })
               ) : (
                 <p className="text-xs text-slate-400 text-center py-4">No approval chain yet</p>
               )}
             </div>
           </div>
 
-          {/* quick actions */}
           <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-700 mb-3 uppercase">Quick Actions</h3>
             <div className="space-y-2">
@@ -457,7 +492,6 @@ export function DocumentDetail() {
         </div>
       </div>
 
-      {/* Create Version Modal */}
       {showVersionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowVersionModal(false)} />
@@ -483,9 +517,10 @@ export function DocumentDetail() {
                 <input
                   type="text"
                   value={newVersion}
-                  onChange={e => setNewVersion(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-600"
                 />
+                <p className="text-xs text-slate-400 mt-1">Automatically assigned</p>
               </div>
 
               <div>
@@ -499,6 +534,42 @@ export function DocumentDetail() {
                   placeholder="Describe the changes in this version..."
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Attach File (Optional)
+                </label>
+                <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-slate-200 border-dashed rounded-lg hover:border-slate-300 transition-colors">
+                  <div className="space-y-1 text-center">
+                    <Upload className="mx-auto h-8 w-8 text-slate-400" />
+                    <div className="flex text-sm text-slate-600">
+                      <label htmlFor="file-upload" className="relative cursor-pointer rounded-md font-medium text-blue-600 focus-within:outline-none focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-2 hover:text-blue-500">
+                        <span>Upload a file</span>
+                        <input
+                          id="file-upload"
+                          type="file"
+                          className="sr-only"
+                          onChange={e => setVersionFile(e.target.files?.[0] || null)}
+                        />
+                      </label>
+                      <p className="pl-1">or drag and drop</p>
+                    </div>
+                    <p className="text-xs text-slate-500">PDF, DOC, DOCX, TXT up to 10MB</p>
+                    {versionFile && (
+                      <div className="mt-2 flex items-center justify-center gap-2 text-xs text-slate-600">
+                        <Paperclip className="w-3 h-3" />
+                        <span className="truncate max-w-xs">{versionFile.name}</span>
+                        <button
+                          onClick={() => setVersionFile(null)}
+                          className="text-red-500 hover:text-red-600"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
