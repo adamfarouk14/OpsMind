@@ -85,7 +85,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
               <div className="flex items-center gap-2">
                 <img src={logo} alt="OpsMind Logo" className="w-7 h-7 object-contain" />
                 <span className="text-white font-bold text-lg tracking-tight">OpsMind</span>
-                <span className="text-[10px] bg-blue-600/40 text-blue-300 px-1.5 py-0.5 rounded font-medium">v2.4</span>
+              
               </div>
               <p className="text-[11px] text-slate-400 mt-1.5 leading-none">Solve Knowledge Base</p>
             </div>

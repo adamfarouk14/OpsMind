@@ -22,22 +22,12 @@ import {
 import { getDocuments } from '../services/documents'
 import { getPendingApprovals } from '../services/approvals'
 import { getActivityLogs } from '../services/activityLogs'
+import { supabase } from '../lib/supabase'
 
 
 
 
-// chart data (8 weeks)
-const chartData = [
-  { week: 'Week 1', created: 28, updated: 18 },
-  { week: 'Week 2', created: 35, updated: 22 },
-  { week: 'Week 3', created: 22, updated: 30 },
-  { week: 'Week 4', created: 40, updated: 25 },
-  { week: 'Week 5', created: 30, updated: 35 },
-  { week: 'Week 6', created: 45, updated: 28 },
-  { week: 'Week 7', created: 38, updated: 42 },
-  { week: 'Week 8 (Current)', created: 55, updated: 48 },
-]
-const maxVal = Math.max(...chartData.flatMap(d => [d.created, d.updated]))
+// chart data will be generated from live activity logs inside the component
 
 
 
@@ -79,117 +69,6 @@ const quickActions = [
   },
 ]
 
-
-
-
-// recent activity
-const recentActivity = [
-  {
-    id: 1,
-    user: 'Adam Ahmed',
-    action: 'approved',
-    doc: 'SOP-102 (POS Troubleshooting SOP)',
-    time: '15 minutes ago',
-    dot: 'bg-green-500',
-    initials: 'AA',
-    avatarBg: 'bg-indigo-100 text-indigo-700',
-  },
-  {
-    id: 2,
-    user: 'Nour El-Din',
-    action: 'submitted draft',
-    doc: 'v1.6 of Receipt Printer Troubleshooting Guide',
-    time: '45 minutes ago',
-    dot: 'bg-blue-500',
-    initials: 'NE',
-    avatarBg: 'bg-pink-100 text-pink-700',
-  },
-  {
-    id: 3,
-    user: 'Hassan Mostafa',
-    action: 'updated',
-    doc: 'Operational Case 03-412 (POS Not Powering On)',
-    time: '2 hours ago',
-    dot: 'bg-orange-400',
-    initials: 'HM',
-    avatarBg: 'bg-orange-100 text-orange-700',
-  },
-  {
-    id: 4,
-    user: 'Youssef Hussein',
-    action: 'updated access permissions for',
-    doc: 'Device Maintenance Guidelines',
-    time: '4 hours ago',
-    dot: 'bg-blue-500',
-    initials: 'YH',
-    avatarBg: 'bg-blue-100 text-blue-700',
-  },
-  {
-    id: 5,
-    user: 'Karim Mahmoud',
-    action: 'published v2.0 of',
-    doc: 'Windows Installation SOP',
-    time: '6 hours ago',
-    dot: 'bg-purple-500',
-    initials: 'KM',
-    avatarBg: 'bg-purple-100 text-purple-700',
-  },
-]
-
-
-
-// documents table
-const documents = [
-  {
-    id: 1,
-    title: 'POS Troubleshooting SOP',
-    code: 'SOP-102 • POS System Troubleshooting Procedures',
-    type: 'SOP',
-    typeColor: 'bg-blue-100 text-blue-700',
-    version: 'v1.8',
-    owner: 'A. Ahmed',
-    ownerBg: 'bg-indigo-100 text-indigo-700',
-    status: 'Approved',
-    statusColor: 'bg-green-100 text-green-700',
-  },
-  {
-    id: 2,
-    title: 'Receipt Printer Troubleshooting Guide',
-    code: 'TG-202 • Printer Hardware & Software Issues',
-    type: 'Technical Document',
-    typeColor: 'bg-teal-100 text-teal-700',
-    version: 'v1.6',
-    owner: 'N. El-Din',
-    ownerBg: 'bg-pink-100 text-pink-700',
-    status: 'In Review',
-    statusColor: 'bg-amber-100 text-amber-700',
-  },
-  {
-    id: 3,
-    title: 'POS Not Powering On',
-    code: 'OC-301 • Device Hardware Failure Cases',
-    type: 'Operational Case',
-    typeColor: 'bg-orange-100 text-orange-700',
-    version: 'v1.0',
-    owner: 'H. Mostafa',
-    ownerBg: 'bg-orange-100 text-orange-700',
-    status: 'Approved',
-    statusColor: 'bg-green-100 text-green-700',
-  },
-  {
-    id: 4,
-    title: 'Device Maintenance Guidelines',
-    code: 'ORG-102 • Hardware Maintenance & Care',
-    type: 'Org Info',
-    typeColor: 'bg-slate-100 text-slate-600',
-    version: 'v1.5',
-    owner: 'Y. Hussein',
-    ownerBg: 'bg-blue-100 text-blue-700',
-    status: 'Draft',
-    statusColor: 'bg-slate-100 text-slate-600',
-  },
-]
-
 export function Dashboard() {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -197,18 +76,24 @@ export function Dashboard() {
   const [documents, setDocuments] = useState<any[]>([])
   const [pendingApprovals, setPendingApprovals] = useState<any[]>([])
   const [activityLogs, setActivityLogs] = useState<any[]>([])
+  const [allLogs, setAllLogs] = useState<any[]>([])
+  const [revisionCount, setRevisionCount] = useState(0)
 
   useEffect(() => {
     async function loadData() {
       try {
-        const [docs, approvals, logs] = await Promise.all([
+        const [docs, approvals, logs, allLogsData, versionsResult] = await Promise.all([
           getDocuments(),
           getPendingApprovals(),
           getActivityLogs(5),
+          getActivityLogs(500),
+          supabase.from('document_versions').select('id', { count: 'exact', head: true }),
         ])
         setDocuments(docs)
         setPendingApprovals(approvals)
         setActivityLogs(logs)
+        setAllLogs(allLogsData)
+        setRevisionCount(versionsResult.count || 0)
       } catch (err) {
         console.error('Failed to load dashboard data:', err)
       } finally {
@@ -217,6 +102,32 @@ export function Dashboard() {
     }
     loadData()
   }, [])
+
+  // Live chart data from activity logs (last 8 weeks)
+  const chartData = (() => {
+    const weeks = []
+    const now = new Date()
+    for (let i = 7; i >= 0; i--) {
+      const weekStart = new Date(now)
+      weekStart.setDate(now.getDate() - i * 7 - 6)
+      weekStart.setHours(0, 0, 0, 0)
+      const weekEnd = new Date(now)
+      weekEnd.setDate(now.getDate() - i * 7)
+      weekEnd.setHours(23, 59, 59, 999)
+      const inWeek = allLogs.filter(l => {
+        const d = new Date(l.created_at)
+        return d >= weekStart && d <= weekEnd
+      })
+      weeks.push({
+        week: i === 0 ? 'This Week' : `Week ${8 - i}`,
+        created: inWeek.filter(l => l.action === 'create').length,
+        updated: inWeek.filter(l => l.action === 'edit').length,
+      })
+    }
+    return weeks
+  })()
+
+  const maxVal = Math.max(...chartData.flatMap(d => [d.created, d.updated]), 1)
 
   const metrics = [
     {
@@ -270,15 +181,15 @@ export function Dashboard() {
     },
     {
       title: 'DOCUMENT REVISIONS',
-      value: '0',
-      badge: 'Active cadence',
+      value: revisionCount.toString(),
+      badge: revisionCount > 0 ? `${revisionCount} version records` : 'No revisions yet',
       badgeColor: 'text-green-600 bg-green-50',
-      sub: ['Across all support', 'teams', '100% current'],
+      sub: ['Across all support', 'teams', 'version history'],
       icon: GitBranch,
       iconBg: 'bg-purple-50',
       iconColor: 'text-purple-600',
       accent: 'border-t-purple-500',
-      published: 'published this month',
+      published: 'total revisions',
     },
   ]
 
@@ -412,6 +323,9 @@ export function Dashboard() {
         })}
       </div>
 
+
+
+
       {/* chart + quick actions + activity */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
@@ -440,6 +354,8 @@ export function Dashboard() {
 
 
 
+
+
           {/* chart */}
           <div className="mt-4 flex items-end gap-2 h-44 px-1">
             {chartData.map((d, i) => {
@@ -465,6 +381,8 @@ export function Dashboard() {
               )
             })}
           </div>
+
+
 
 
 
@@ -518,6 +436,7 @@ export function Dashboard() {
 
       {/* documents table + activity log */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+
 
         {/* documents table */}
         <div className="xl:col-span-2 bg-white rounded-xl border border-slate-200">

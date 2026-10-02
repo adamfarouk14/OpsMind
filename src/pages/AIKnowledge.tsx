@@ -1,16 +1,51 @@
-import { useState, useEffect } from 'react'
-import { searchDocuments, getDocuments } from '../services/documents'
+import { useState, useEffect, useRef } from 'react'
+import { searchDocuments } from '../services/documents'
 import {
   Sparkles,
   Send,
   FileText,
   AlertCircle,
-  Clock,
-  ChevronRight,
   Lightbulb,
   BookOpen,
   Search,
+  ChevronRight,
 } from 'lucide-react'
+
+// Search with multiple strategies to maximize recall
+async function smartSearch(query: string) {
+  const results: any[] = []
+  const seen = new Set<string>()
+
+  const addUnique = (docs: any[]) => {
+    for (const doc of docs) {
+      if (!seen.has(doc.id)) {
+        seen.add(doc.id)
+        results.push(doc)
+      }
+    }
+  }
+
+  // Strategy 1: full phrase search
+  try {
+    const r = await searchDocuments(query)
+    addUnique(r)
+  } catch {}
+
+  // Strategy 2: search each meaningful word separately
+  const words = query
+    .split(/\s+/)
+    .map(w => w.trim())
+    .filter(w => w.length > 2)
+
+  for (const word of words) {
+    try {
+      const r = await searchDocuments(word)
+      addUnique(r)
+    } catch {}
+  }
+
+  return results.slice(0, 5)
+}
 
 interface Message {
   id: number
@@ -22,8 +57,83 @@ interface Message {
     title: string
     code: string
     type: string
-    relevance: number
   }>
+}
+
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
+
+async function askGemini(question: string, contextDocs: any[]): Promise<string> {
+  if (!GEMINI_API_KEY) throw new Error('Gemini API key not configured')
+
+  const hasContext = contextDocs.length > 0
+
+  const context = hasContext
+    ? contextDocs
+        .map(doc =>
+          `Title: ${doc.title} (${doc.code})\nType: ${doc.type}\nDescription: ${doc.description || 'N/A'}\nContent: ${(doc.content || '').slice(0, 1000)}`
+        )
+        .join('\n\n---\n\n')
+    : ''
+
+  const prompt = hasContext
+    ? `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System.
+
+The user asked: "${question}"
+
+I found these relevant documents in the knowledge base:
+
+${context}
+
+Instructions:
+- Answer the user's question in a clear, helpful and friendly way
+- Use the documents above as your primary source
+- Reference specific document titles when relevant
+- If the documents fully answer the question, base your answer on them
+- If the documents are only partially relevant, use them plus your general knowledge
+- Be conversational and helpful like a knowledgeable colleague`
+    : `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System called OpsMind.
+
+The user asked: "${question}"
+
+No specific documents were found in the knowledge base for this query.
+
+Instructions:
+- Answer helpfully and conversationally using your general knowledge
+- If it's a greeting or general question, respond naturally and friendly
+- If it's a technical question related to IT support, answer from your general knowledge and suggest the user add relevant documents to OpsMind
+- Keep responses concise and clear`
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
+
+  let response: Response
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 1024,
+          },
+        }),
+      }
+    )
+  } finally {
+    clearTimeout(timeout)
+  }
+
+  if (!response.ok) {
+    const err = await response.json()
+    throw new Error(err?.error?.message || 'Gemini API error')
+  }
+
+  const data = await response.json()
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated.'
 }
 
 export function AIKnowledge() {
@@ -32,22 +142,22 @@ export function AIKnowledge() {
     {
       id: 1,
       type: 'ai',
-      content: 'Hello! I\'m your AI knowledge assistant. I can help you find relevant information from the OpsMind knowledge base. Ask me about SOPs, technical documents, operational cases, or any support procedures.',
+      content: "Hello! I'm your AI knowledge assistant powered by Google Gemini. Ask me anything about SOPs, technical documents, or operational cases stored in OpsMind.",
       timestamp: 'Just now',
     },
   ])
   const [isProcessing, setIsProcessing] = useState(false)
-  const [allDocs, setAllDocs] = useState<any[]>([])
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    getDocuments().then(docs => setAllDocs(docs)).catch(console.error)
-  }, [])
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
 
   const handleSend = async () => {
-    if (!query.trim()) return
+    if (!query.trim() || isProcessing) return
 
     const userMessage: Message = {
-      id: messages.length + 1,
+      id: Date.now(),
       type: 'user',
       content: query,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -59,29 +169,31 @@ export function AIKnowledge() {
     setIsProcessing(true)
 
     try {
-      const results = await searchDocuments(currentQuery)
-      const relevantDocs = results.slice(0, 3)
+      // Search the knowledge base for relevant docs
+      const relevantDocs = await smartSearch(currentQuery)
+
+      // Always call Gemini — pass docs as context if found, otherwise let it answer generally
+      const aiContent = await askGemini(currentQuery, relevantDocs)
 
       const aiMessage: Message = {
-        id: messages.length + 2,
+        id: Date.now() + 1,
         type: 'ai',
-        content: generateAIResponse(currentQuery, relevantDocs),
+        content: aiContent,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         sources: relevantDocs.length > 0 ? relevantDocs.map(doc => ({
           id: doc.id,
           title: doc.title,
           code: doc.code,
           type: doc.type,
-          relevance: 0.9 - Math.random() * 0.2,
         })) : undefined,
       }
 
       setMessages(prev => [...prev, aiMessage])
     } catch (err) {
       const errMessage: Message = {
-        id: messages.length + 2,
+        id: Date.now() + 1,
         type: 'ai',
-        content: 'Sorry, I encountered an error while searching the knowledge base. Please try again.',
+        content: `Sorry, I encountered an error: ${(err as Error).message}. Please try again.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
       setMessages(prev => [...prev, errMessage])
@@ -90,17 +202,8 @@ export function AIKnowledge() {
     }
   }
 
-  const generateAIResponse = (query: string, docs: any[]): string => {
-    if (docs.length === 0) {
-      return `I couldn't find specific information about "${query}" in the knowledge base. Try rephrasing your question or search for related terms like "POS", "printer", "troubleshooting", or "installation".`
-    }
-
-    const docList = docs.map(d => `• ${d.title} (${d.code})`).join('\n')
-    return `Based on your question about "${query}", I found ${docs.length} relevant document${docs.length > 1 ? 's' : ''} in the knowledge base:\n\n${docList}\n\nThese documents contain information that may help you. Would you like me to elaborate on any specific document?`
-  }
-
   const suggestedQuestions = [
-    'How do I troubleshoot a POS that won\'t power on?',
+    "How do I troubleshoot a POS that won't power on?",
     'What are the steps for receipt printer setup?',
     'How do I configure a barcode scanner?',
     'What is the SOP for device replacement?',
@@ -113,7 +216,7 @@ export function AIKnowledge() {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-purple-500" />
-            AI Knowledge Assistantt
+            AI Knowledge Assistant
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
             Ask questions and get AI-assisted answers from the knowledge base
@@ -121,7 +224,7 @@ export function AIKnowledge() {
         </div>
         <div className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 rounded-lg">
           <Sparkles className="w-4 h-4 text-purple-600" />
-          <span className="text-xs font-semibold text-purple-700">AI-Powered</span>
+          <span className="text-xs font-semibold text-purple-700">Gemini AI</span>
         </div>
       </div>
 
@@ -131,42 +234,37 @@ export function AIKnowledge() {
         <div>
           <p className="text-sm font-semibold text-blue-900 mb-1">How it works</p>
           <p className="text-xs text-blue-700 leading-relaxed">
-            I search through all stored documents (SOPs, technical guides, operational cases) to find relevant information for your questions. I retrieve existing knowledge but dont create new organizational information.
+            I search through stored documents (SOPs, technical guides, operational cases) and use Google Gemini to generate contextual answers based on the retrieved content. I only use information already in OpsMind.
           </p>
         </div>
       </div>
 
-      {/* chat container */}
+      {/* chat */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        {/* messages */}
         <div className="h-[500px] overflow-y-auto p-4 space-y-4">
           {messages.map(message => (
             <div
               key={message.id}
               className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <div className={`max-w-[80%] ${message.type === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-900'} rounded-2xl p-4`}>
+              <div className={`max-w-[82%] ${message.type === 'user' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-900'} rounded-2xl p-4`}>
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
                 <p className={`text-[10px] mt-2 ${message.type === 'user' ? 'text-blue-200' : 'text-slate-400'}`}>
                   {message.timestamp}
                 </p>
 
-                {/* sources */}
                 {message.sources && message.sources.length > 0 && (
-                  <div className="mt-3 pt-3 border-t border-slate-200/20">
-                    <p className="text-[10px] font-semibold mb-2 flex items-center gap-1">
+                  <div className="mt-3 pt-3 border-t border-slate-200">
+                    <p className="text-[11px] font-semibold mb-2 text-slate-600 flex items-center gap-1">
                       <BookOpen className="w-3 h-3" />
-                      Sources:
+                      Sources used:
                     </p>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {message.sources.map((source, i) => (
-                        <div key={i} className="flex items-start gap-2 text-xs">
-                          <FileText className="w-3 h-3 text-slate-400 mt-0.5 flex-shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium">{source.title}</p>
-                            <p className="text-slate-400">{source.code} · {source.type}</p>
-                          </div>
-                          <ChevronRight className="w-3 h-3 text-slate-400 flex-shrink-0 mt-0.5" />
+                        <div key={i} className="flex items-center gap-2 text-xs text-slate-600">
+                          <FileText className="w-3 h-3 text-slate-400 flex-shrink-0" />
+                          <span className="font-medium truncate">{source.title}</span>
+                          <span className="text-slate-400 flex-shrink-0">{source.code}</span>
                         </div>
                       ))}
                     </div>
@@ -180,14 +278,16 @@ export function AIKnowledge() {
             <div className="flex justify-start">
               <div className="bg-slate-100 rounded-2xl p-4">
                 <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" />
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-100" />
-                  <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-200" />
-                  <span className="text-xs text-slate-500">Searching knowledge base...</span>
+                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" />
+                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce [animation-delay:150ms]" />
+                  <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce [animation-delay:300ms]" />
+                  <span className="text-xs text-slate-500 ml-1">Searching & generating answer...</span>
                 </div>
               </div>
             </div>
           )}
+
+          <div ref={messagesEndRef} />
         </div>
 
         {/* input */}
@@ -199,7 +299,7 @@ export function AIKnowledge() {
                 type="text"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                onKeyPress={e => e.key === 'Enter' && handleSend()}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
                 placeholder="Ask about SOPs, technical documents, or operational cases..."
                 className="w-full pl-10 pr-4 py-3 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white placeholder:text-slate-400 transition-all"
               />
@@ -246,7 +346,7 @@ export function AIKnowledge() {
         <div>
           <p className="text-xs font-semibold text-amber-900 mb-1">AI Limitations</p>
           <p className="text-xs text-amber-700 leading-relaxed">
-            AI assists with knowledge retrieval from stored documents. Always verify critical information with official SOPs and consult supervisors for important decisions.
+            AI answers are based solely on documents stored in OpsMind. Always verify critical information with official SOPs and consult supervisors for important decisions.
           </p>
         </div>
       </div>

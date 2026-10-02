@@ -231,7 +231,13 @@ export function DocumentDetail() {
             <Download className="w-3.5 h-3.5" />
             Download
           </button>
-          <button className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(window.location.href)
+                .then(() => alert('Link copied to clipboard!'))
+                .catch(() => alert('Could not copy link'))
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm border border-slate-200 bg-white hover:bg-slate-50 rounded-lg font-medium text-slate-700 transition-colors">
             <Share2 className="w-3.5 h-3.5" />
             Share
           </button>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getDocuments } from '../services/documents'
-import type { DocType, DocStatus } from '../types/database'
+import { getActivityLogs } from '../services/activityLogs'
 import {
   FileText,
   TrendingUp,
@@ -20,22 +20,27 @@ export function Reports() {
   const [dateRange, setDateRange] = useState<'30D' | '90D' | '1Y'>('30D')
   const [activeReport, setActiveReport] = useState<'overview' | 'by-type' | 'approvals' | 'activity'>('overview')
   const [documents, setDocuments] = useState<any[]>([])
+  const [activityLogs, setActivityLogs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    async function loadDocuments() {
+    async function loadData() {
       try {
-        const data = await getDocuments()
-        setDocuments(data)
+        const [docs, logs] = await Promise.all([
+          getDocuments(),
+          getActivityLogs(500),
+        ])
+        setDocuments(docs)
+        setActivityLogs(logs)
       } catch (err) {
-        setError('Failed to load documents: ' + (err as Error).message)
-        console.error('Error loading documents:', err)
+        setError('Failed to load reports: ' + (err as Error).message)
+        console.error('Error loading reports:', err)
       } finally {
         setLoading(false)
       }
     }
-    loadDocuments()
+    loadData()
   }, [])
 
   const getDateCutoff = (range: '30D' | '90D' | '1Y'): Date => {
@@ -66,18 +71,33 @@ export function Reports() {
     { type: 'Org Info', count: filteredDocuments.filter(d => d.type === 'Org Info').length, color: 'bg-slate-400' },
   ]
 
-  const recentActivity = [
-    { period: 'Week 1', created: 28, updated: 18 },
-    { period: 'Week 2', created: 35, updated: 22 },
-    { period: 'Week 3', created: 22, updated: 30 },
-    { period: 'Week 4', created: 40, updated: 25 },
-    { period: 'Week 5', created: 30, updated: 35 },
-    { period: 'Week 6', created: 45, updated: 28 },
-    { period: 'Week 7', created: 38, updated: 42 },
-    { period: 'Week 8', created: 55, updated: 48 },
-  ]
+  // Build weekly activity chart from live logs (last 8 weeks)
+  const recentActivity = (() => {
+    const weeks: { period: string; created: number; updated: number }[] = []
+    const now = new Date()
+    for (let i = 7; i >= 0; i--) {
+      const weekStart = new Date(now)
+      weekStart.setDate(now.getDate() - i * 7 - 6)
+      weekStart.setHours(0, 0, 0, 0)
+      const weekEnd = new Date(now)
+      weekEnd.setDate(now.getDate() - i * 7)
+      weekEnd.setHours(23, 59, 59, 999)
 
-  const maxActivityValue = Math.max(...recentActivity.flatMap(d => [d.created, d.updated]))
+      const logsInWeek = activityLogs.filter(l => {
+        const d = new Date(l.created_at)
+        return d >= weekStart && d <= weekEnd
+      })
+
+      weeks.push({
+        period: i === 0 ? 'This Week' : `Week ${8 - i}`,
+        created: logsInWeek.filter(l => l.action === 'create').length,
+        updated: logsInWeek.filter(l => l.action === 'edit').length,
+      })
+    }
+    return weeks
+  })()
+
+  const maxActivityValue = Math.max(...recentActivity.flatMap(d => [d.created, d.updated]), 1)
 
   return (
     <div className="space-y-5">
