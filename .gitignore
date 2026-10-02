@@ -23,7 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# Environment variables
+# Environment variables — excluded from version control
 .env
 .env.local
 .env.production.local
