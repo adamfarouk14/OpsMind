@@ -52,6 +52,8 @@ const STATUS_ICONS: Record<DocStatus, React.ElementType> = {
   Rejected: AlertCircle,
 }
 
+
+
 const TYPE_STYLES: Record<DocType, string> = {
   SOP: 'bg-blue-100 text-blue-700',
   'Technical Document': 'bg-teal-100 text-teal-700',

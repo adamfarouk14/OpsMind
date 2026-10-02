@@ -18,8 +18,9 @@ export function Login() {
       setError('Please enter both email and password')
       return
     }
-
-    try {
+ 
+    
+    try { 
       setLoading(true)
       setError(null)
       

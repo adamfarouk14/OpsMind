@@ -113,7 +113,7 @@ export function AIKnowledge() {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-purple-500" />
-            AI Knowledge Assistant
+            AI Knowledge Assistantt
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
             Ask questions and get AI-assisted answers from the knowledge base
@@ -131,7 +131,7 @@ export function AIKnowledge() {
         <div>
           <p className="text-sm font-semibold text-blue-900 mb-1">How it works</p>
           <p className="text-xs text-blue-700 leading-relaxed">
-            I search through all stored documents (SOPs, technical guides, operational cases) to find relevant information for your questions. I retrieve existing knowledge but don't create new organizational information.
+            I search through all stored documents (SOPs, technical guides, operational cases) to find relevant information for your questions. I retrieve existing knowledge but dont create new organizational information.
           </p>
         </div>
       </div>
