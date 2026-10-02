@@ -137,6 +137,9 @@ The following environment variables are required:
 **OpsMind: Enterprise Knowledge and Operations Platform**
 
 **Student:** Adam Mohamed Farouk
+
 **Program:** Bachelor of Software Engineering (Honours)
+
 **University:** Nilai University
+
 **Project:** SE Project — OEC3328
