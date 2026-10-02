@@ -142,4 +142,4 @@ The following environment variables are required:
 
 **University:** Nilai University
 
-**Project:** SE Project — OEC3328
+**Project:** SE Project - OEC3328
