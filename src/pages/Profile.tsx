@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { updateUser } from '../services/users'
+import { updateUser, getUserById } from '../services/users'
 import { getActivityLogs } from '../services/activityLogs'
-import { getDocuments } from '../services/documents'
 import {
   User,
   Mail,
@@ -12,7 +11,6 @@ import {
   Save,
   ArrowLeft,
   Edit2,
-  Camera,
   Loader2,
   Lock,
 } from 'lucide-react'
@@ -23,6 +21,7 @@ export function Profile() {
   const [loading, setLoading] = useState(false)
   const [editing, setEditing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [department, setDepartment] = useState('Technical Support')
   const [formData, setFormData] = useState({
     name: user?.name || '',
     email: user?.email || '',
@@ -39,19 +38,23 @@ export function Profile() {
   useEffect(() => {
     if (!user?.id) return
 
-    async function loadStats() {
+    async function loadData() {
       try {
-        const [logs, docs] = await Promise.all([
+        const [logs, dbUser] = await Promise.all([
           getActivityLogs(500),
-          getDocuments(),
+          getUserById(user!.id),
         ])
+
+        // Set real department from DB
+        const realDept = dbUser?.department || 'Technical Support'
+        setDepartment(realDept)
+        setFormData(prev => ({ ...prev, department: realDept }))
 
         const myLogs = logs.filter((l: any) => l.user_id === user!.id)
         const created = myLogs.filter((l: any) => l.action === 'create').length
         const edited = myLogs.filter((l: any) => l.action === 'edit').length
         const approved = myLogs.filter((l: any) => l.action === 'approve').length
 
-        // earliest log as a proxy for member since
         const earliest = myLogs.length > 0
           ? new Date(myLogs[myLogs.length - 1].created_at)
           : new Date()
@@ -63,11 +66,11 @@ export function Profile() {
           memberSince: earliest.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
         })
       } catch (err) {
-        console.error('Failed to load profile stats:', err)
+        console.error('Failed to load profile data:', err)
       }
     }
 
-    loadStats()
+    loadData()
   }, [user?.id])
 
   const handleSave = async () => {
@@ -102,7 +105,7 @@ export function Profile() {
     setFormData({
       name: user?.name || '',
       email: user?.email || '',
-      department: 'Technical Support',
+      department,
     })
     setEditing(false)
     setError(null)
@@ -156,7 +159,7 @@ export function Profile() {
                 </div>
                 <div className="flex items-center justify-center gap-2">
                   <Building2 className="w-4 h-4 text-slate-400" />
-                  <span className="text-sm text-slate-500">Technical Support</span>
+                  <span className="text-sm text-slate-500">{department}</span>
                 </div>
               </div>
             </div>
@@ -242,7 +245,7 @@ export function Profile() {
                 ) : (
                   <div className="flex items-center gap-2">
                     <Building2 className="w-4 h-4 text-slate-400" />
-                    <p className="text-sm text-slate-900">Technical Support</p>
+                  <p className="text-sm text-slate-900">{department}</p>
                   </div>
                 )}
               </div>

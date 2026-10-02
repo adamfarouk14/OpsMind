@@ -1,12 +1,12 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
-import type { UserWithRole } from '../types/database'
 
 interface User {
   id: string
   email: string
   name: string
   role: string
+  permissions: string[]
   initials: string
   avatar_color: string
 }
@@ -80,6 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: data.email,
           name: data.name,
           role: data.roles?.name || 'Support Agent',
+          permissions: data.roles?.permissions || [],
           initials: data.initials || data.name.split(' ').map(n => n[0]).join(''),
           avatar_color: data.avatar_color || 'bg-slate-100 text-slate-600',
         })
@@ -97,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             email: authUser.email || '',
             name: name,
             role: 'Admin',
+            permissions: ['Create Documents', 'Edit Documents', 'Delete Documents', 'Approve Documents', 'Manage Users', 'Manage Roles', 'View Reports', 'Export Data'],
             initials: name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2),
             avatar_color: 'bg-purple-100 text-purple-700',
           })
@@ -119,6 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           email: email,
           name: 'System Admin',
           role: 'Admin',
+          permissions: ['Create Documents', 'Edit Documents', 'Delete Documents', 'Approve Documents', 'Manage Users', 'Manage Roles', 'View Reports', 'Export Data'],
           initials: 'SA',
           avatar_color: 'bg-purple-100 text-purple-700'
         }
@@ -158,14 +161,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const hasPermission = (permission: string): boolean => {
-    const rolePermissions: Record<string, string[]> = {
-      Admin: ['all'],
-      Manager: ['documents', 'approvals', 'users'],
-      'Support Agent': ['documents', 'search'],
-    }
-    
-    const userPermissions = rolePermissions[user?.role || 'Support Agent'] || []
-    return userPermissions.includes('all') || userPermissions.includes(permission)
+    if (!user) return false
+    // Admin with 'all' shortcut
+    if (user.role === 'Admin') return true
+    // Check against the permissions array fetched from DB
+    return user.permissions.some(p => p.toLowerCase().includes(permission.toLowerCase()))
   }
 
   return (

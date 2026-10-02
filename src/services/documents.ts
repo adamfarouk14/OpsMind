@@ -121,7 +121,7 @@ export async function createDocumentVersion(documentId: string, version: {
   const { data, error } = await supabase
     .from('document_versions')
     .insert({
-      document_id,
+      document_id: documentId,
       ...version,
     })
     .select()

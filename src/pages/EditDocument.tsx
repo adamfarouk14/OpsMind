@@ -4,7 +4,8 @@ import type { DocType } from '../types/database'
 import { getDocumentById, updateDocument, createDocumentVersion } from '../services/documents'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
-import { ArrowLeft, Save, X, AlertCircle, ChevronDown, GitBranch, Loader2 } from 'lucide-react'
+import { supabase } from '../lib/supabase'
+import { ArrowLeft, Save, X, AlertCircle, ChevronDown, GitBranch, Loader2, Upload } from 'lucide-react'
 
 export function EditDocument() {
   const { id } = useParams()
@@ -22,8 +23,10 @@ export function EditDocument() {
     content: '',
     tags: '',
     versionNotes: '',
+    category: '',
   })
 
+  const [file, setFile] = useState<File | null>(null)
   const [showDiscardModal, setShowDiscardModal] = useState(false)
   const [createNewVersion, setCreateNewVersion] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -40,8 +43,9 @@ export function EditDocument() {
           type: documentData.type || 'SOP',
           description: documentData.description || '',
           content: documentData.content || '',
-          tags: documentData.tags?.join(', ') || '',
+          tags: documentData.tags?.filter((t: string) => !t.startsWith('Category: ')).join(', ') || '',
           versionNotes: '',
+          category: documentData.tags?.find((t: string) => t.startsWith('Category: '))?.replace('Category: ', '') || '',
         })
       } catch (err) {
         setError('Failed to load document: ' + (err as Error).message)
@@ -115,7 +119,25 @@ export function EditDocument() {
       setError(null)
 
       const newVersion = createNewVersion ? incrementVersion(doc.version) : doc.version
-      const tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t)
+      let tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t)
+      if (form.type === 'Operational Case' && form.category.trim()) {
+        tagsArray = tagsArray.filter(t => !t.startsWith('Category: '))
+        tagsArray.unshift(`Category: ${form.category.trim()}`)
+      }
+
+      let contentWithFile = form.content
+
+      // Upload new file if provided
+      if (file) {
+        const ext = file.name.split('.').pop()
+        const path = `${user.id}/${Date.now()}_${form.code}.${ext}`
+        const { error: uploadError } = await supabase.storage
+          .from('documents')
+          .upload(path, file, { upsert: false })
+        if (uploadError) throw new Error('File upload failed: ' + uploadError.message)
+        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(path)
+        contentWithFile = `${form.content}\n\n[Attached file: ${urlData.publicUrl}]`
+      }
 
       if (createNewVersion && form.versionNotes.trim()) {
         await createDocumentVersion(doc.id, {
@@ -131,7 +153,7 @@ export function EditDocument() {
         type: form.type,
         version: newVersion,
         description: form.description,
-        content: form.content,
+        content: contentWithFile,
         tags: tagsArray,
       })
 
@@ -326,6 +348,54 @@ export function EditDocument() {
               </div>
             </div>
 
+            {/* file upload + category */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6">
+              <h2 className="text-sm font-semibold text-slate-900 mb-4">Attachments & Additional Info</h2>
+
+              {form.type === 'Operational Case' && (
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">Case Category</label>
+                  <input
+                    type="text"
+                    value={form.category}
+                    onChange={e => setForm({ ...form, category: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g. Hardware, Network, Software, POS"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Replace / Add File (optional)
+                </label>
+                <label className={`flex items-center gap-3 px-4 py-3 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+                  file ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
+                }`}>
+                  <Upload className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    {file ? (
+                      <p className="text-xs font-medium text-blue-700 truncate">{file.name}</p>
+                    ) : (
+                      <p className="text-xs text-slate-500">Click to upload a new file</p>
+                    )}
+                    <p className="text-[10px] text-slate-400 mt-0.5">PDF, Word, Excel, image — max 10MB</p>
+                  </div>
+                  {file && (
+                    <button type="button" onClick={e => { e.preventDefault(); setFile(null) }} className="text-slate-400 hover:text-red-500 transition-colors">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt"
+                    onChange={e => setFile(e.target.files?.[0] || null)}
+                  />
+                </label>
+              </div>
+            </div>
+
             {/* content */}
             <div className="bg-white rounded-xl border border-slate-200 p-6">
               <h2 className="text-sm font-semibold text-slate-900 mb-4">Document Content</h2>
@@ -378,10 +448,10 @@ export function EditDocument() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between mb-0.5">
                           <p className="text-xs font-semibold text-slate-900">{v.version}</p>
-                          <p className="text-[10px] text-slate-400">{v.date}</p>
+                          <p className="text-[10px] text-slate-400">{v.created_at ? new Date(v.created_at).toLocaleDateString() : ''}</p>
                         </div>
                         <p className="text-[10px] text-slate-600 truncate">{v.notes}</p>
-                        <p className="text-[10px] text-slate-400">by {v.author}</p>
+                        <p className="text-[10px] text-slate-400">by {v.users?.name || 'Unknown'}</p>
                       </div>
                     </div>
                   ))}

@@ -5,7 +5,7 @@ import { createDocument } from '../services/documents'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
-import { ArrowLeft, Save, X, AlertCircle, ChevronDown, FileText, Loader2, Upload, Paperclip } from 'lucide-react'
+import { ArrowLeft, Save, X, AlertCircle, ChevronDown, FileText, Loader2, Upload } from 'lucide-react'
 
 export function CreateDocument() {
   const navigate = useNavigate()
@@ -271,6 +271,63 @@ export function CreateDocument() {
                   placeholder="e.g. POS, Installation, Hardware (comma separated)"
                 />
                 <p className="text-xs text-slate-400 mt-1">Separate multiple tags with commas</p>
+              </div>
+            </div>
+
+            {/* file upload + category for Operational Case */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6">
+              <h2 className="text-sm font-semibold text-slate-900 mb-4">Attachments & Additional Info</h2>
+
+              {/* category — only for Operational Case */}
+              {form.type === 'Operational Case' && (
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    Case Category
+                  </label>
+                  <input
+                    type="text"
+                    value={form.category}
+                    onChange={e => setForm({ ...form, category: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g. Hardware, Network, Software, POS"
+                  />
+                  <p className="text-xs text-slate-400 mt-1">Used to categorize this operational case</p>
+                </div>
+              )}
+
+              {/* file upload */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Attach File (optional)
+                </label>
+                <label className={`flex items-center gap-3 px-4 py-3 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+                  file ? 'border-blue-300 bg-blue-50' : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
+                }`}>
+                  <Upload className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    {file ? (
+                      <p className="text-xs font-medium text-blue-700 truncate">{file.name}</p>
+                    ) : (
+                      <p className="text-xs text-slate-500">Click to upload PDF, Word, or image file</p>
+                    )}
+                    <p className="text-[10px] text-slate-400 mt-0.5">Max 10MB</p>
+                  </div>
+                  {file && (
+                    <button
+                      type="button"
+                      onClick={e => { e.preventDefault(); setFile(null) }}
+                      className="text-slate-400 hover:text-red-500 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt"
+                    onChange={e => setFile(e.target.files?.[0] || null)}
+                  />
+                </label>
               </div>
             </div>
 
