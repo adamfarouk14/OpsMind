@@ -60,80 +60,62 @@ interface Message {
   }>
 }
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY
 
-async function askGemini(question: string, contextDocs: any[]): Promise<string> {
-  if (!GEMINI_API_KEY) throw new Error('Gemini API key not configured')
+async function askGroq(question: string, contextDocs: any[]): Promise<string> {
+  if (!GROQ_API_KEY) throw new Error('Groq API key not configured')
 
   const hasContext = contextDocs.length > 0
 
-  const context = hasContext
-    ? contextDocs
-        .map(doc =>
-          `Title: ${doc.title} (${doc.code})\nType: ${doc.type}\nDescription: ${doc.description || 'N/A'}\nContent: ${(doc.content || '').slice(0, 1000)}`
-        )
-        .join('\n\n---\n\n')
-    : ''
+  const systemPrompt = `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System. You help support agents find information from stored SOPs, technical documents, and operational cases.`
 
-  const prompt = hasContext
-    ? `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System.
+  const userPrompt = hasContext
+    ? `The user asked: "${question}"
 
-The user asked: "${question}"
+Here are the relevant documents found in the knowledge base:
 
-I found these relevant documents in the knowledge base:
+${contextDocs.map(doc =>
+  `Title: ${doc.title} (${doc.code})\nType: ${doc.type}\nDescription: ${doc.description || 'N/A'}\nContent: ${(doc.content || '').slice(0, 1000)}`
+).join('\n\n---\n\n')}
 
-${context}
+Answer the user's question using these documents as your primary source. Reference specific document titles when relevant. Be clear, helpful, and concise.`
+    : `The user asked: "${question}"
 
-Instructions:
-- Answer the user's question in a clear, helpful and friendly way
-- Use the documents above as your primary source
-- Reference specific document titles when relevant
-- If the documents fully answer the question, base your answer on them
-- If the documents are only partially relevant, use them plus your general knowledge
-- Be conversational and helpful like a knowledgeable colleague`
-    : `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System called OpsMind.
-
-The user asked: "${question}"
-
-No specific documents were found in the knowledge base for this query.
-
-Instructions:
-- Answer helpfully and conversationally using your general knowledge
-- If it's a greeting or general question, respond naturally and friendly
-- If it's a technical question related to IT support, answer from your general knowledge and suggest the user add relevant documents to OpsMind
-- Keep responses concise and clear`
+No specific documents were found in the knowledge base for this query. Answer helpfully using your general knowledge. If it's a greeting or general question, respond naturally. If it's a technical IT support question, answer from general knowledge and suggest adding relevant documents to OpsMind.`
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15000)
 
   let response: Response
   try {
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 1024,
-          },
-        }),
-      }
-    )
+    response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: 'openai/gpt-oss-120b',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 1024,
+      }),
+    })
   } finally {
     clearTimeout(timeout)
   }
 
   if (!response.ok) {
     const err = await response.json()
-    throw new Error(err?.error?.message || 'Gemini API error')
+    throw new Error(err?.error?.message || 'Groq API error')
   }
 
   const data = await response.json()
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated.'
+  return data.choices?.[0]?.message?.content || 'No response generated.'
 }
 
 export function AIKnowledge() {
@@ -142,7 +124,7 @@ export function AIKnowledge() {
     {
       id: 1,
       type: 'ai',
-      content: "Hello! I'm your AI knowledge assistant powered by Google Gemini. Ask me anything about SOPs, technical documents, or operational cases stored in OpsMind.",
+      content: "Hello! I'm your AI knowledge assistant powered by Groq. Ask me anything about SOPs, technical documents, or operational cases stored in OpsMind.",
       timestamp: 'Just now',
     },
   ])
@@ -173,7 +155,7 @@ export function AIKnowledge() {
       const relevantDocs = await smartSearch(currentQuery)
 
       // Always call Gemini — pass docs as context if found, otherwise let it answer generally
-      const aiContent = await askGemini(currentQuery, relevantDocs)
+      const aiContent = await askGroq(currentQuery, relevantDocs)
 
       const aiMessage: Message = {
         id: Date.now() + 1,
@@ -224,7 +206,7 @@ export function AIKnowledge() {
         </div>
         <div className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 rounded-lg">
           <Sparkles className="w-4 h-4 text-purple-600" />
-          <span className="text-xs font-semibold text-purple-700">Gemini AI</span>
+          <span className="text-xs font-semibold text-purple-700">Groq AI</span>
         </div>
       </div>
 
@@ -234,7 +216,7 @@ export function AIKnowledge() {
         <div>
           <p className="text-sm font-semibold text-blue-900 mb-1">How it works</p>
           <p className="text-xs text-blue-700 leading-relaxed">
-            I search through stored documents (SOPs, technical guides, operational cases) and use Google Gemini to generate contextual answers based on the retrieved content. I only use information already in OpsMind.
+            I search through stored documents (SOPs, technical guides, operational cases) and use Groq AI to generate contextual answers based on the retrieved content. I only use information already in OpsMind.
           </p>
         </div>
       </div>
