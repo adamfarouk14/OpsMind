@@ -155,7 +155,7 @@ export function AIKnowledge() {
       // Search the knowledge base for relevant docs
       const relevantDocs = await smartSearch(currentQuery)
 
-      // Always call Gemini — pass docs as context if found, otherwise let it answer generally
+      // Always call groq — pass docs as context if found, otherwise let it answer generally
       const aiContent = await askGroq(currentQuery, relevantDocs)
 
       const aiMessage: Message = {

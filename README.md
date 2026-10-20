@@ -12,7 +12,7 @@ The idea came from a real problem I noticed at work — technical information wa
 - Submit documents for approval and track their status through a review workflow
 - Version control — every document change is tracked with notes
 - Centralized search across all document types
-- AI assistant (powered by Google Gemini) that searches the knowledge base and answers questions based on stored documents
+- AI assistant (powered by Groq) that searches the knowledge base and answers questions based on stored documents
 - Activity logs for every action in the system
 - Role-based access — Admin, Manager, and Support Agent each have different permissions
 - Notifications when documents are approved, rejected, or submitted for review
@@ -25,7 +25,7 @@ The idea came from a real problem I noticed at work — technical information wa
 - **Tailwind CSS** — styling
 - **shadcn/ui** — UI components
 - **Supabase** — database, authentication, and file storage
-- **Google Gemini API** — AI knowledge retrieval
+- **Google Groq API** — AI knowledge retrieval
 
 ---
 
