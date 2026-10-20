@@ -20,7 +20,7 @@ export async function getPendingApprovals(): Promise<DocumentWithOwner[]> {
 }
 
 async function insertNotification(userId: string, type: string, title: string, message: string, documentId: string) {
-  await supabase.from('notifications').insert({
+  const { error } = await supabase.from('notifications').insert({
     user_id: userId,
     type,
     title,
@@ -28,6 +28,39 @@ async function insertNotification(userId: string, type: string, title: string, m
     document_id: documentId,
     is_read: false,
   })
+  if (error) console.error('Failed to insert notification:', error.message)
+}
+
+// Ensures an approval row exists for a document, creating it if missing.
+async function ensureApprovalRow(documentId: string, status: ApprovalStatus) {
+  const { data: existing } = await supabase
+    .from('approvals')
+    .select('id')
+    .eq('document_id', documentId)
+    .single()
+
+  if (existing) {
+    // Row exists — update it
+    const { error } = await supabase
+      .from('approvals')
+      .update({
+        status,
+        date: new Date().toISOString(),
+      })
+      .eq('document_id', documentId)
+    if (error) throw error
+  } else {
+    // No row — create it
+    const { error } = await supabase
+      .from('approvals')
+      .insert({
+        document_id: documentId,
+        step: 'Review',
+        status,
+        date: new Date().toISOString(),
+      })
+    if (error) throw error
+  }
 }
 
 export async function approveDocument(documentId: string, remarks?: string) {
@@ -38,19 +71,35 @@ export async function approveDocument(documentId: string, remarks?: string) {
 
   if (docError) throw docError
 
-  const { error: approvalError } = await supabase
+  const { data: existing } = await supabase
     .from('approvals')
-    .update({
-      status: 'Approved' as ApprovalStatus,
-      date: new Date().toISOString(),
-      notes: remarks || null,
-    })
+    .select('id')
     .eq('document_id', documentId)
-    .eq('status', 'Pending')
+    .single()
 
-  if (approvalError) throw approvalError
+  if (existing) {
+    const { error } = await supabase
+      .from('approvals')
+      .update({
+        status: 'Approved' as ApprovalStatus,
+        date: new Date().toISOString(),
+        notes: remarks || null,
+      })
+      .eq('document_id', documentId)
+    if (error) throw error
+  } else {
+    const { error } = await supabase
+      .from('approvals')
+      .insert({
+        document_id: documentId,
+        step: 'Review',
+        status: 'Approved' as ApprovalStatus,
+        date: new Date().toISOString(),
+        notes: remarks || null,
+      })
+    if (error) throw error
+  }
 
-  // Notify the document owner
   const { data: doc } = await supabase
     .from('documents')
     .select('title, owner_id')
@@ -76,19 +125,35 @@ export async function rejectDocument(documentId: string, remarks?: string) {
 
   if (docError) throw docError
 
-  const { error: approvalError } = await supabase
+  const { data: existing } = await supabase
     .from('approvals')
-    .update({
-      status: 'Rejected' as ApprovalStatus,
-      date: new Date().toISOString(),
-      notes: remarks || null,
-    })
+    .select('id')
     .eq('document_id', documentId)
-    .eq('status', 'Pending')
+    .single()
 
-  if (approvalError) throw approvalError
+  if (existing) {
+    const { error } = await supabase
+      .from('approvals')
+      .update({
+        status: 'Rejected' as ApprovalStatus,
+        date: new Date().toISOString(),
+        notes: remarks || null,
+      })
+      .eq('document_id', documentId)
+    if (error) throw error
+  } else {
+    const { error } = await supabase
+      .from('approvals')
+      .insert({
+        document_id: documentId,
+        step: 'Review',
+        status: 'Rejected' as ApprovalStatus,
+        date: new Date().toISOString(),
+        notes: remarks || null,
+      })
+    if (error) throw error
+  }
 
-  // Notify the document owner
   const { data: doc } = await supabase
     .from('documents')
     .select('title, owner_id')
@@ -114,7 +179,28 @@ export async function submitForApproval(documentId: string) {
 
   if (error) throw error
 
-  // Notify admins/managers that a doc is pending review
+  // Upsert the approval row so it's always present and set to Pending
+  const { data: existing } = await supabase
+    .from('approvals')
+    .select('id')
+    .eq('document_id', documentId)
+    .single()
+
+  if (existing) {
+    await supabase
+      .from('approvals')
+      .update({ status: 'Pending' as ApprovalStatus, date: null, notes: null })
+      .eq('document_id', documentId)
+  } else {
+    await supabase
+      .from('approvals')
+      .insert({
+        document_id: documentId,
+        step: 'Review',
+        status: 'Pending' as ApprovalStatus,
+      })
+  }
+
   const { data: doc } = await supabase
     .from('documents')
     .select('title, owner_id')
@@ -122,11 +208,10 @@ export async function submitForApproval(documentId: string) {
     .single()
 
   if (doc) {
-    // Get all Admin and Manager users
     const { data: reviewers } = await supabase
       .from('users')
       .select('id, roles:role_id(name)')
-      .in('status', ['Active'])
+      .eq('status', 'Active')
 
     const reviewerIds = (reviewers || [])
       .filter((u: any) => u.roles?.name === 'Admin' || u.roles?.name === 'Manager')

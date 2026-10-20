@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { searchDocuments } from '../services/documents'
+import { supabase } from '../lib/supabase'
 import {
   Sparkles,
   Send,
@@ -84,7 +85,7 @@ Answer the user's question using these documents as your primary source. Referen
 No specific documents were found in the knowledge base for this query. Answer helpfully using your general knowledge. If it's a greeting or general question, respond naturally. If it's a technical IT support question, answer from general knowledge and suggest adding relevant documents to OpsMind.`
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 15000)
+  const timeout = setTimeout(() => controller.abort(), 20000)
 
   let response: Response
   try {
@@ -172,10 +173,11 @@ export function AIKnowledge() {
 
       setMessages(prev => [...prev, aiMessage])
     } catch (err) {
+      console.error('[AIKnowledge] Request failed:', (err as Error).message)
       const errMessage: Message = {
         id: Date.now() + 1,
         type: 'ai',
-        content: `Sorry, I encountered an error: ${(err as Error).message}. Please try again.`,
+        content: 'Something went wrong while processing your request. Please try again.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
       setMessages(prev => [...prev, errMessage])

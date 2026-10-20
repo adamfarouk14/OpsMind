@@ -190,9 +190,7 @@ export function Documents() {
   useEffect(() => {
     async function loadDocuments() {
       try {
-        console.log('Loading documents from Supabase...')
         const data = await getDocuments()
-        console.log('Documents loaded:', data)
         setDocuments(data)
       } catch (err) {
         console.error('Error loading documents:', err)
@@ -445,7 +443,8 @@ export function Documents() {
                     return (
                       <tr
                         key={doc.id}
-                        className="border-b border-slate-50 hover:bg-slate-50/70 transition-colors group"
+                        onClick={() => navigate(`/documents/${doc.id}`)}
+                        className="border-b border-slate-50 hover:bg-slate-50/70 transition-colors group cursor-pointer"
                       >
                         {/* title + code */}
                         <td className="py-3.5 px-5">

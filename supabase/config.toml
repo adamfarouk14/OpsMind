@@ -1,0 +1,2 @@
+[functions.ask-groq]
+verify_jwt = true
