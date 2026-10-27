@@ -108,7 +108,10 @@ export function DocumentDetail() {
     if (!doc || !user) return
     try {
       setSubmitting(true)
-      await submitForApproval(doc.id)
+      const result = await submitForApproval(doc.id, user.id)
+      if (result.notificationWarning) {
+        console.warn('[DocumentDetail]', result.notificationWarning)
+      }
       await logActivity({
         user_id: user.id,
         action: 'edit',
@@ -168,7 +171,8 @@ export function DocumentDetail() {
     )
   }
 
-  const StatusIcon = STATUS_ICONS[doc.status]
+  const statusKey = doc.status as DocStatus
+  const StatusIcon = STATUS_ICONS[statusKey]
 
   return (
     <div className="space-y-5">
@@ -184,7 +188,7 @@ export function DocumentDetail() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <h1 className="text-xl font-bold text-slate-900">{doc.title}</h1>
-              <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded ${STATUS_STYLES[doc.status]}`}>
+              <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded ${STATUS_STYLES[statusKey]}`}>
                 <StatusIcon className="w-3 h-3" />
                 {doc.status}
               </span>
@@ -259,7 +263,7 @@ export function DocumentDetail() {
                   <p className="text-xs text-slate-400 mb-0.5">Owner</p>
                   <div className="flex items-center gap-2">
                     <div className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${doc.users?.avatar_color || 'bg-slate-100 text-slate-600'}`}>
-                      {doc.users?.initials || doc.users?.name?.split(' ').map(n => n[0]).join('') || 'U'}
+                      {doc.users?.initials || doc.users?.name?.split(' ').map((n: string) => n[0]).join('') || 'U'}
                     </div>
                     <p className="text-sm font-medium text-slate-900">{doc.users?.name || 'Unknown'}</p>
                   </div>
@@ -348,23 +352,24 @@ export function DocumentDetail() {
             </div>
             <div className="space-y-3">
               {doc.versions && doc.versions.length > 0 ? (
-                doc.versions.map((v: any, index: number) => {
-                  const isCurrentVersion = v.version === doc.version
+                doc.versions.map((v: unknown, _index: number) => {
+                  const version = v as { id: string; version: string; created_at: string; author_id: string; notes: string; users?: { name: string; initials: string; avatar_color: string } }
+                  const isCurrentVersion = version.version === doc.version
                   return (
-                    <div key={v.id} className={`flex items-start gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0 ${isCurrentVersion ? 'bg-blue-50/50 -mx-2 px-2 rounded' : ''}`}>
+                    <div key={version.id} className={`flex items-start gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0 ${isCurrentVersion ? 'bg-blue-50/50 -mx-2 px-2 rounded' : ''}`}>
                       <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${isCurrentVersion ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-600'}`}>
                         <GitBranch className="w-3 h-3" />
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between mb-1">
                           <p className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-                            {v.version}
+                            {version.version}
                             {isCurrentVersion && <span className="text-[10px] font-medium px-1.5 py-0.5 bg-blue-600 text-white rounded">Current</span>}
                           </p>
-                          <p className="text-xs text-slate-400">{new Date(v.created_at).toLocaleDateString()}</p>
+                          <p className="text-xs text-slate-400">{new Date(version.created_at).toLocaleDateString()}</p>
                         </div>
-                        <p className="text-xs text-slate-600 mb-1">{v.notes || 'No notes'}</p>
-                        <p className="text-xs text-slate-400">Created by {v.author_id === user?.id ? 'you' : (v.users?.name || v.author_id?.slice(0, 8) || 'unknown')}</p>
+                        <p className="text-xs text-slate-600 mb-1">{version.notes || 'No notes'}</p>
+                        <p className="text-xs text-slate-400">Created by {version.author_id === user?.id ? 'you' : (version.users?.name || version.author_id?.slice(0, 8) || 'unknown')}</p>
                       </div>
                     </div>
                   )

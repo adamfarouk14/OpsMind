@@ -5,7 +5,6 @@ import {
   Filter,
   Clock,
   FileText,
-  User,
   Calendar,
   CheckCircle,
   XCircle,
@@ -227,7 +226,7 @@ export function ActivityLogs() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <div className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center ${log.users?.avatar_color || 'bg-slate-100 text-slate-600'}`}>
-                          {log.users?.initials || log.users?.name?.split(' ').map(n => n[0]).join('') || 'U'}
+                          {log.users?.initials || log.users?.name?.split(' ').map((n: string) => n[0]).join('') || 'U'}
                         </div>
                         <span className="text-sm font-semibold text-slate-900">{log.users?.name || 'Unknown'}</span>
                         <span className="text-xs text-slate-400">•</span>

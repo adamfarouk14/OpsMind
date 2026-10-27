@@ -3,6 +3,7 @@ import { getUsers, getRoles, updateUser } from '../services/users'
 import { signUp } from '../services/auth'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
+import { supabase } from '../lib/supabase'
 import {
   Users,
   Shield,
@@ -11,7 +12,6 @@ import {
   Plus,
   Search,
   Filter,
-  MoreHorizontal,
   Edit,
   ChevronDown,
   UserPlus,
@@ -19,12 +19,15 @@ import {
   Loader2,
   X,
   Save,
+  UserX,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react'
 
 const ROLE_STYLES: Record<string, string> = {
   Admin: 'bg-purple-100 text-purple-700',
   Manager: 'bg-blue-100 text-blue-700',
-  'Support Agent': 'bg-teal-100 text-teal-700',
+  Employee: 'bg-teal-100 text-teal-700',
 }
 
 const STATUS_STYLES: Record<string, string> = {
@@ -35,7 +38,7 @@ const STATUS_STYLES: Record<string, string> = {
 export function Administration() {
   const [activeTab, setActiveTab] = useState<'users' | 'roles' | 'settings'>('users')
   const [search, setSearch] = useState('')
-  const [roleFilter, setRoleFilter] = useState<'All' | 'Admin' | 'Manager' | 'Support Agent'>('All')
+  const [roleFilter, setRoleFilter] = useState<'All' | 'Admin' | 'Manager' | 'Employee'>('All')
   const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Inactive'>('All')
   const [users, setUsers] = useState<any[]>([])
   const [roles, setRoles] = useState<any[]>([])
@@ -45,7 +48,7 @@ export function Administration() {
 
   // Add User modal
   const [showAddUserModal, setShowAddUserModal] = useState(false)
-  const [newUserForm, setNewUserForm] = useState({ name: '', email: '', password: '', role: 'Support Agent', department: 'Technical Support' })
+  const [newUserForm, setNewUserForm] = useState({ name: '', email: '', password: '', role: 'Employee', department: 'Technical Support' })
   const [addingUser, setAddingUser] = useState(false)
   const [addUserError, setAddUserError] = useState<string | null>(null)
 
@@ -54,6 +57,15 @@ export function Administration() {
   const [editUserForm, setEditUserForm] = useState({ name: '', department: '' })
   const [savingUser, setSavingUser] = useState(false)
   const [editUserError, setEditUserError] = useState<string | null>(null)
+
+  // Deactivate User modal
+  const [deactivatingUser, setDeactivatingUser] = useState<any | null>(null)
+  const [deactivateUserLoading, setDeactivateUserLoading] = useState(false)
+
+  // Delete User modal
+  const [deletingUser, setDeletingUser] = useState<any | null>(null)
+  const [deleteUserLoading, setDeleteUserLoading] = useState(false)
+  const [canDeleteUser, setCanDeleteUser] = useState(false)
 
   // Department settings
   const [deptSettings, setDeptSettings] = useState({ name: 'Technical Support', code: 'TS-001', autoApprove: false, requireVersioning: true })
@@ -85,6 +97,10 @@ export function Administration() {
       setAddUserError('Name, email and password are required')
       return
     }
+    if (newUserForm.password.length < 8) {
+      setAddUserError('Password must be at least 8 characters long')
+      return
+    }
     try {
       setAddingUser(true)
       setAddUserError(null)
@@ -99,9 +115,11 @@ export function Administration() {
       const updated = await getUsers()
       setUsers(updated)
       setShowAddUserModal(false)
-      setNewUserForm({ name: '', email: '', password: '', role: 'Support Agent', department: 'Technical Support' })
+      setNewUserForm({ name: '', email: '', password: '', role: 'Employee', department: 'Technical Support' })
     } catch (err) {
-      setAddUserError('Failed to create user: ' + (err as Error).message)
+      console.error('Create user error:', err)
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      setAddUserError('Failed to create user: ' + errorMsg)
     } finally {
       setAddingUser(false)
     }
@@ -142,6 +160,107 @@ export function Administration() {
       setEditUserError('Failed to save: ' + (err as Error).message)
     } finally {
       setSavingUser(false)
+    }
+  }
+
+  const handleDeactivateUser = async () => {
+    if (!deactivatingUser) return
+    
+    // Prevent deactivating yourself
+    if (deactivatingUser.id === currentUser?.id) {
+      alert('You cannot deactivate your own account')
+      setDeactivatingUser(null)
+      return
+    }
+
+    console.log('Deactivating user:', deactivatingUser.id, deactivatingUser.name, deactivatingUser.email)
+
+    try {
+      setDeactivateUserLoading(true)
+      
+      // Use the existing updateUser function (same as status toggle)
+      await updateUser(deactivatingUser.id, { status: 'Inactive' })
+      
+      await logActivity({
+        user_id: currentUser?.id,
+        action: 'edit',
+        target_type: 'user',
+        target_id: deactivatingUser.id,
+        target_title: deactivatingUser.name,
+        details: `Deactivated user: ${deactivatingUser.name} (${deactivatingUser.email})`,
+      })
+      
+      // Update local state to show user as Inactive
+      setUsers(prev => prev.map(u => 
+        u.id === deactivatingUser.id ? { ...u, status: 'Inactive' } : u
+      ))
+      setDeactivatingUser(null)
+    } catch (err) {
+      console.error('Deactivation error:', err)
+      alert('Failed to deactivate user: ' + (err as Error).message)
+    } finally {
+      setDeactivateUserLoading(false)
+    }
+  }
+
+  const checkCanDeleteUser = async (userId: string) => {
+    try {
+      // Check if user has any related records
+      const [docs, versions, approvals, logs, notifications] = await Promise.all([
+        supabase.from('documents').select('id', { count: 'exact', head: true }).eq('owner_id', userId),
+        supabase.from('document_versions').select('id', { count: 'exact', head: true }).eq('author_id', userId),
+        supabase.from('approvals').select('id', { count: 'exact', head: true }).eq('approver_id', userId),
+        supabase.from('activity_logs').select('id', { count: 'exact', head: true }).eq('user_id', userId),
+        supabase.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', userId),
+      ])
+
+      const totalRecords = (docs.count || 0) + (versions.count || 0) + (approvals.count || 0) + 
+                          (logs.count || 0) + (notifications.count || 0)
+      
+      setCanDeleteUser(totalRecords === 0)
+    } catch (err) {
+      console.error('Failed to check delete eligibility:', err)
+      setCanDeleteUser(false)
+    }
+  }
+
+  const openDeleteUserModal = async (user: any) => {
+    setDeletingUser(user)
+    setCanDeleteUser(false)
+    await checkCanDeleteUser(user.id)
+  }
+
+  const handleDeleteUser = async () => {
+    if (!deletingUser || !canDeleteUser) return
+
+    try {
+      setDeleteUserLoading(true)
+      
+      // Delete from public.users
+      const { error: deleteError } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', deletingUser.id)
+
+      if (deleteError) throw deleteError
+
+      await logActivity({
+        user_id: currentUser?.id,
+        action: 'delete',
+        target_type: 'user',
+        target_id: deletingUser.id,
+        target_title: deletingUser.name,
+        details: `Permanently deleted user: ${deletingUser.name} (${deletingUser.email})`,
+      })
+
+      // Remove from local state
+      setUsers(prev => prev.filter(u => u.id !== deletingUser.id))
+      setDeletingUser(null)
+    } catch (err) {
+      console.error('Delete error:', err)
+      alert('Failed to delete user: ' + (err as Error).message)
+    } finally {
+      setDeleteUserLoading(false)
     }
   }
 
@@ -313,7 +432,7 @@ export function Administration() {
                       <option value="All">All Roles</option>
                       <option value="Admin">Admin</option>
                       <option value="Manager">Manager</option>
-                      <option value="Support Agent">Support Agent</option>
+                      <option value="Employee">Employee</option>
                     </select>
                     <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
                   </div>
@@ -377,7 +496,7 @@ export function Administration() {
                                 <option value="No Role">No Role</option>
                                 <option value="Admin">Admin</option>
                                 <option value="Manager">Manager</option>
-                                <option value="Support Agent">Support Agent</option>
+                                <option value="Employee">Employee</option>
                               </select>
                             </td>
                             <td className="py-3.5 px-3 text-sm text-slate-600">{user.department}</td>
@@ -394,13 +513,31 @@ export function Administration() {
                               {user.last_active_at ? new Date(user.last_active_at).toLocaleDateString() : 'Never'}
                             </td>
                             <td className="py-3.5 px-3">
-                              <button
-                                onClick={() => openEditUser(user)}
-                                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-                                title="Edit user"
-                              >
-                                <MoreHorizontal className="w-4 h-4" />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => openEditUser(user)}
+                                  className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                  title="Edit user"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => setDeactivatingUser(user)}
+                                  disabled={user.id === currentUser?.id || user.status === 'Inactive'}
+                                  className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                  title={user.id === currentUser?.id ? "Can't deactivate yourself" : user.status === 'Inactive' ? "Already inactive" : "Deactivate user"}
+                                >
+                                  <UserX className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => openDeleteUserModal(user)}
+                                  disabled={user.id === currentUser?.id}
+                                  className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                  title={user.id === currentUser?.id ? "Can't delete yourself" : "Permanently delete user"}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -615,7 +752,7 @@ export function Administration() {
                       onChange={e => setNewUserForm({ ...newUserForm, role: e.target.value })}
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="Support Agent">Support Agent</option>
+                      <option value="Employee">Employee</option>
                       <option value="Manager">Manager</option>
                       <option value="Admin">Admin</option>
                     </select>
@@ -690,6 +827,178 @@ export function Administration() {
                   >
                     {savingUser ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</> : <><Save className="w-3.5 h-3.5" /> Save Changes</>}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Deactivate User Confirmation Modal ── */}
+          {deactivatingUser && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setDeactivatingUser(null)} />
+              <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+                <div className="flex items-start gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                    <AlertTriangle className="w-5 h-5 text-amber-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-base font-bold text-slate-900">Deactivate User?</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Are you sure you want to deactivate <strong>{deactivatingUser.name}</strong>? 
+                      They will no longer be able to log in or access the system.
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="bg-slate-50 rounded-lg p-3 mb-4">
+                  <div className="flex items-center gap-2 text-xs text-slate-600">
+                    <Users className="w-4 h-4 text-slate-400" />
+                    <span><strong>Email:</strong> {deactivatingUser.email}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-600 mt-1">
+                    <Shield className="w-4 h-4 text-slate-400" />
+                    <span><strong>Role:</strong> {deactivatingUser.roles?.name || 'Unknown'}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-green-700 mt-2 bg-green-50 rounded px-2 py-1">
+                    <span>✓ All user data will be preserved (documents, approvals, logs)</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-blue-700 mt-1 bg-blue-50 rounded px-2 py-1">
+                    <span>ℹ️ You can reactivate this user later if needed</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button 
+                    onClick={() => setDeactivatingUser(null)} 
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeactivateUser}
+                    disabled={deactivateUserLoading}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                  >
+                    {deactivateUserLoading ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        Deactivating...
+                      </>
+                    ) : (
+                      <>
+                        <UserX className="w-3.5 h-3.5" />
+                        Deactivate User
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Delete User Confirmation Modal ── */}
+          {deletingUser && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => {
+                setDeletingUser(null)
+                setCanDeleteUser(false)
+              }} />
+              <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+                <div className="flex items-start gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                    <Trash2 className="w-5 h-5 text-red-600" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-base font-bold text-slate-900">Delete User Permanently?</h3>
+                    <p className="text-sm text-slate-500 mt-1">
+                      Checking if <strong>{deletingUser.name}</strong> can be deleted...
+                    </p>
+                  </div>
+                </div>
+                
+                {canDeleteUser === null ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+                    <span className="ml-3 text-sm text-slate-500">Checking for related records...</span>
+                  </div>
+                ) : canDeleteUser ? (
+                  <>
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                      <p className="text-sm font-semibold text-red-900 mb-2">⚠️ Warning: This action is irreversible!</p>
+                      <p className="text-xs text-red-700">
+                        User <strong>{deletingUser.name}</strong> and all their account data will be permanently deleted from the system.
+                      </p>
+                    </div>
+                    
+                    <div className="bg-slate-50 rounded-lg p-3 mb-4">
+                      <div className="flex items-center gap-2 text-xs text-slate-600">
+                        <Users className="w-4 h-4 text-slate-400" />
+                        <span><strong>Email:</strong> {deletingUser.email}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-600 mt-1">
+                        <Shield className="w-4 h-4 text-slate-400" />
+                        <span><strong>Role:</strong> {deletingUser.roles?.name || 'Unknown'}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-green-700 mt-2 bg-green-50 rounded px-2 py-1">
+                        <span>✓ No related records found - safe to delete</span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                      <p className="text-sm font-semibold text-yellow-900 mb-2">🚫 Cannot Delete User</p>
+                      <p className="text-xs text-yellow-700 mb-3">
+                        User <strong>{deletingUser.name}</strong> has related records in the system (documents, approvals, activity logs, etc.).
+                      </p>
+                      <p className="text-xs text-yellow-800 font-medium">
+                        💡 <strong>Tip:</strong> Use the Deactivate option instead to prevent login while preserving all data integrity.
+                      </p>
+                    </div>
+                    
+                    <div className="bg-slate-50 rounded-lg p-3 mb-4">
+                      <div className="flex items-center gap-2 text-xs text-slate-600">
+                        <Users className="w-4 h-4 text-slate-400" />
+                        <span><strong>Email:</strong> {deletingUser.email}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-slate-600 mt-1">
+                        <Shield className="w-4 h-4 text-slate-400" />
+                        <span><strong>Role:</strong> {deletingUser.roles?.name || 'Unknown'}</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div className="flex items-center justify-end gap-2">
+                  <button 
+                    onClick={() => {
+                      setDeletingUser(null)
+                      setCanDeleteUser(false)
+                    }}
+                    disabled={deleteUserLoading}
+                    className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  {canDeleteUser && (
+                    <button
+                      onClick={handleDeleteUser}
+                      disabled={deleteUserLoading}
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                    >
+                      {deleteUserLoading ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Deleting...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Delete Permanently
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

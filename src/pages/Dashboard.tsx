@@ -490,7 +490,7 @@ export function Dashboard() {
                     <td className="py-3 px-3 hidden md:table-cell">
                       <div className="flex items-center gap-2">
                         <div className={`w-6 h-6 rounded-full text-[10px] font-bold flex items-center justify-center ${doc.ownerBg}`}>
-                          {doc.owner.split(' ').map(p => p[0]).join('')}
+                          {doc.owner.split(' ').map((p: string) => p[0]).join('')}
                         </div>
                         <span className="text-[12px] text-slate-600">{doc.owner}</span>
                       </div>

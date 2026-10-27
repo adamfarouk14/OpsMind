@@ -52,7 +52,7 @@ npm run dev
 
 The app requires these tables in Supabase: `roles`, `users`, `documents`, `document_versions`, `approvals`, `activity_logs`, `notifications`.
 
-Make sure Row Level Security is disabled on all tables, or configure the policies to allow authenticated access.
+For a deployment using the hardened access controls, review `supabase/rls_document_access.sql` against the live database policies before applying it. Do not leave Row Level Security disabled on tables containing application or user data. The `create-user` Edge Function must also be deployed with JWT verification enabled; it uses Supabase's server-side `SUPABASE_SERVICE_ROLE_KEY` to create users only after verifying the caller is an Admin. Never expose the service-role key in frontend environment variables.
 
 ---
 

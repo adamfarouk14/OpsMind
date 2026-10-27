@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getPendingApprovals, approveDocument, rejectDocument } from '../services/approvals'
+import { approveDocument, rejectDocument } from '../services/approvals'
 import { getDocuments } from '../services/documents'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
@@ -13,7 +13,6 @@ import {
   ChevronDown,
   Eye,
   MoreHorizontal,
-  AlertCircle,
   Calendar,
   User,
   Loader2,
@@ -69,11 +68,14 @@ export function Approvals() {
     : documents.filter(doc => doc.status === activeStatus)
 
   const handleApprove = async () => {
-    if (!selectedDoc) return
+    if (!selectedDoc || !user) return
     const doc = documents.find(d => d.id === selectedDoc)
     try {
       setActionLoading(true)
-      await approveDocument(selectedDoc, remarks)
+      const result = await approveDocument(selectedDoc, user.id, remarks)
+      if (result.notificationWarning) {
+        console.warn('[Approvals]', result.notificationWarning)
+      }
       await logActivity({
         user_id: user?.id,
         action: 'approve',
@@ -96,11 +98,14 @@ export function Approvals() {
   }
 
   const handleReject = async () => {
-    if (!selectedDoc) return
+    if (!selectedDoc || !user) return
     const doc = documents.find(d => d.id === selectedDoc)
     try {
       setActionLoading(true)
-      await rejectDocument(selectedDoc, remarks)
+      const result = await rejectDocument(selectedDoc, user.id, remarks)
+      if (result.notificationWarning) {
+        console.warn('[Approvals]', result.notificationWarning)
+      }
       await logActivity({
         user_id: user?.id,
         action: 'reject',
@@ -197,7 +202,8 @@ export function Approvals() {
               </div>
             ) : (
               filteredDocs.map(doc => {
-                const StatusIcon = STATUS_ICONS[doc.status]
+                const statusKey = doc.status as DocStatus
+                const StatusIcon = STATUS_ICONS[statusKey]
                 return (
                   <div key={doc.id} className="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-sm transition-shadow">
                     <div className="flex items-start justify-between gap-4">
@@ -205,7 +211,7 @@ export function Approvals() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-2">
                           <h3 className="text-sm font-semibold text-slate-900">{doc.title}</h3>
-                          <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded ${STATUS_STYLES[doc.status]}`}>
+                          <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded ${STATUS_STYLES[statusKey]}`}>
                             <StatusIcon className="w-3 h-3" />
                             {doc.status}
                           </span>

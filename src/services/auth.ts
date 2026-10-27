@@ -1,44 +1,40 @@
 import { supabase } from '../lib/supabase'
 import type { UserRole } from '../types/database'
 
-export async function signUp(email: string, password: string, name: string, role: UserRole = 'Support Agent') {
-  // First, create auth user
-  const { data: authData, error: authError } = await supabase.auth.signUp({
-    email,
-    password,
+export async function signUp(
+  email: string,
+  password: string,
+  name: string,
+  role: UserRole = 'Employee',
+  department = 'Technical Support'
+) {
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+  if (sessionError) throw sessionError
+  if (!session) throw new Error('You must be signed in as an administrator to create users.')
+
+  console.log('Calling create-user function with:', { email, name, role, department })
+
+  const { data, error } = await supabase.functions.invoke('create-user', {
+    body: { email, password, name, role, department },
   })
 
-  if (authError) throw authError
+  console.log('Function response:', { data, error })
 
-  if (authData.user) {
-    // Get the role ID
-    const { data: roleData, error: roleError } = await supabase
-      .from('roles')
-      .select('id')
-      .eq('name', role)
-      .single()
-
-    if (roleError) throw roleError
-
-    // Create user record in users table
-    const { error: userError } = await supabase
-      .from('users')
-      .insert({
-        id: authData.user.id,
-        email,
-        name,
-        password_hash: '', // Auth handles password
-        role_id: roleData.id,
-        department: 'Technical Support',
-        status: 'Active',
-        initials: name.split(' ').map(n => n[0]).join(''),
-        avatar_color: 'bg-blue-100 text-blue-700',
-      })
-
-    if (userError) throw userError
+  if (error) {
+    console.error('Function invocation error:', error)
+    throw error
   }
-
-  return authData
+  if (data?.error) {
+    console.error('Function returned error:', data.error)
+    throw new Error(data.error)
+  }
+  
+  // Check for success
+  if (!data?.success) {
+    throw new Error('User creation failed: Unknown error')
+  }
+  
+  return data
 }
 
 export async function signIn(email: string, password: string) {

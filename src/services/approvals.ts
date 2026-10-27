@@ -1,6 +1,20 @@
 import { supabase } from '../lib/supabase'
 import type { ApprovalStatus, DocumentWithOwner } from '../types/database'
 
+export interface ApprovalResult {
+  success: true
+  notificationWarning?: string
+}
+
+// Snapshot of an existing approval row used for compensating rollback.
+interface ApprovalSnapshot {
+  id: string
+  status: ApprovalStatus
+  approver_id: string | null
+  date: string | null
+  notes: string | null
+}
+
 export async function getPendingApprovals(): Promise<DocumentWithOwner[]> {
   const { data, error } = await supabase
     .from('documents')
@@ -19,7 +33,14 @@ export async function getPendingApprovals(): Promise<DocumentWithOwner[]> {
   return data as DocumentWithOwner[]
 }
 
-async function insertNotification(userId: string, type: string, title: string, message: string, documentId: string) {
+// Returns a warning string if the notification failed, null if it succeeded.
+async function tryInsertNotification(
+  userId: string,
+  type: string,
+  title: string,
+  message: string,
+  documentId: string
+): Promise<string | null> {
   const { error } = await supabase.from('notifications').insert({
     user_id: userId,
     type,
@@ -28,76 +49,108 @@ async function insertNotification(userId: string, type: string, title: string, m
     document_id: documentId,
     is_read: false,
   })
-  if (error) console.error('Failed to insert notification:', error.message)
+  if (error) {
+    console.error('Notification insert failed:', error.message)
+    return error.message
+  }
+  return null
 }
 
-// Ensures an approval row exists for a document, creating it if missing.
-async function ensureApprovalRow(documentId: string, status: ApprovalStatus) {
-  const { data: existing } = await supabase
+// Reads the current approval row for a document.
+// Returns exists:false when the row doesn't exist yet ,
+// throws on any real DB error so callers don't silently skip to insert.
+async function readApprovalRow(
+  documentId: string
+): Promise<{ snapshot: ApprovalSnapshot; exists: true } | { snapshot: null; exists: false }> {
+  const { data, error } = await supabase
     .from('approvals')
-    .select('id')
+    .select('id, status, approver_id, date, notes')
     .eq('document_id', documentId)
     .single()
 
-  if (existing) {
-    // Row exists — update it
+  if (error) {
+    if (error.code === 'PGRST116') return { snapshot: null, exists: false } // no rows
+    throw new Error(`Approval record lookup failed: ${error.message}`)
+  }
+
+  return { snapshot: data as ApprovalSnapshot, exists: true }
+}
+
+// Best-effort rollback — restores the approval row to its previous values.
+// Logs on failure but doesn't throw, so the original error can propagate.
+async function rollbackApprovalRow(snapshot: ApprovalSnapshot): Promise<void> {
+  const { error } = await supabase
+    .from('approvals')
+    .update({
+      status: snapshot.status,
+      approver_id: snapshot.approver_id,
+      date: snapshot.date,
+      notes: snapshot.notes,
+    })
+    .eq('id', snapshot.id)
+
+  if (error) {
+    console.error(
+      `[approvals] Rollback failed for approval ${snapshot.id} (document_id implied). ` +
+      `Manual correction may be needed. Error: ${error.message}`
+    )
+  }
+}
+
+export async function approveDocument(
+  documentId: string,
+  approverId: string,
+  remarks?: string
+): Promise<ApprovalResult> {
+  const lookup = await readApprovalRow(documentId)
+
+  if (lookup.exists) {
     const { error } = await supabase
       .from('approvals')
       .update({
-        status,
+        status: 'Approved' as ApprovalStatus,
+        approver_id: approverId,
         date: new Date().toISOString(),
+        notes: remarks || null,
       })
       .eq('document_id', documentId)
-    if (error) throw error
+    if (error) throw new Error(`Failed to update approval record: ${error.message}`)
   } else {
-    // No row — create it
     const { error } = await supabase
       .from('approvals')
       .insert({
         document_id: documentId,
         step: 'Review',
-        status,
+        status: 'Approved' as ApprovalStatus,
+        approver_id: approverId,
         date: new Date().toISOString(),
+        notes: remarks || null,
       })
-    if (error) throw error
+    if (error) throw new Error(`Failed to create approval record: ${error.message}`)
   }
-}
 
-export async function approveDocument(documentId: string, remarks?: string) {
+  // Update document status. If this fails, roll back the approval row change.
   const { error: docError } = await supabase
     .from('documents')
     .update({ status: 'Approved' })
     .eq('id', documentId)
 
-  if (docError) throw docError
-
-  const { data: existing } = await supabase
-    .from('approvals')
-    .select('id')
-    .eq('document_id', documentId)
-    .single()
-
-  if (existing) {
-    const { error } = await supabase
-      .from('approvals')
-      .update({
-        status: 'Approved' as ApprovalStatus,
-        date: new Date().toISOString(),
-        notes: remarks || null,
-      })
-      .eq('document_id', documentId)
-    if (error) throw error
-  } else {
-    const { error } = await supabase
-      .from('approvals')
-      .insert({
-        document_id: documentId,
-        step: 'Review',
-        status: 'Approved' as ApprovalStatus,
-        date: new Date().toISOString(),
-        notes: remarks || null,
-      })
-    if (error) throw error
+  if (docError) {
+    if (lookup.exists) {
+      await rollbackApprovalRow(lookup.snapshot)
+    } else {
+      const { error: deleteError } = await supabase
+        .from('approvals')
+        .delete()
+        .eq('document_id', documentId)
+      if (deleteError) {
+        console.error(
+          `[approvals] Could not delete newly-inserted approval row after document update failure. ` +
+          `document_id=${documentId}. Error: ${deleteError.message}`
+        )
+      }
+    }
+    throw new Error(`Failed to update document status: ${docError.message}`)
   }
 
   const { data: doc } = await supabase
@@ -106,41 +159,39 @@ export async function approveDocument(documentId: string, remarks?: string) {
     .eq('id', documentId)
     .single()
 
+  let notificationWarning: string | undefined
   if (doc?.owner_id) {
-    await insertNotification(
+    const warn = await tryInsertNotification(
       doc.owner_id,
       'approval',
       'Document Approved',
       `Your document "${doc.title}" has been approved.${remarks ? ` Remarks: ${remarks}` : ''}`,
       documentId
     )
+    if (warn) notificationWarning = `Approval saved, but owner notification failed: ${warn}`
   }
+
+  return { success: true, ...(notificationWarning ? { notificationWarning } : {}) }
 }
 
-export async function rejectDocument(documentId: string, remarks?: string) {
-  const { error: docError } = await supabase
-    .from('documents')
-    .update({ status: 'Rejected' })
-    .eq('id', documentId)
+export async function rejectDocument(
+  documentId: string,
+  approverId: string,
+  remarks?: string
+): Promise<ApprovalResult> {
+  const lookup = await readApprovalRow(documentId)
 
-  if (docError) throw docError
-
-  const { data: existing } = await supabase
-    .from('approvals')
-    .select('id')
-    .eq('document_id', documentId)
-    .single()
-
-  if (existing) {
+  if (lookup.exists) {
     const { error } = await supabase
       .from('approvals')
       .update({
         status: 'Rejected' as ApprovalStatus,
+        approver_id: approverId,
         date: new Date().toISOString(),
         notes: remarks || null,
       })
       .eq('document_id', documentId)
-    if (error) throw error
+    if (error) throw new Error(`Failed to update approval record: ${error.message}`)
   } else {
     const { error } = await supabase
       .from('approvals')
@@ -148,10 +199,34 @@ export async function rejectDocument(documentId: string, remarks?: string) {
         document_id: documentId,
         step: 'Review',
         status: 'Rejected' as ApprovalStatus,
+        approver_id: approverId,
         date: new Date().toISOString(),
         notes: remarks || null,
       })
-    if (error) throw error
+    if (error) throw new Error(`Failed to create approval record: ${error.message}`)
+  }
+
+  const { error: docError } = await supabase
+    .from('documents')
+    .update({ status: 'Rejected' })
+    .eq('id', documentId)
+
+  if (docError) {
+    if (lookup.exists) {
+      await rollbackApprovalRow(lookup.snapshot)
+    } else {
+      const { error: deleteError } = await supabase
+        .from('approvals')
+        .delete()
+        .eq('document_id', documentId)
+      if (deleteError) {
+        console.error(
+          `[approvals] Could not delete newly-inserted approval row after document update failure. ` +
+          `document_id=${documentId}. Error: ${deleteError.message}`
+        )
+      }
+    }
+    throw new Error(`Failed to update document status: ${docError.message}`)
   }
 
   const { data: doc } = await supabase
@@ -160,45 +235,63 @@ export async function rejectDocument(documentId: string, remarks?: string) {
     .eq('id', documentId)
     .single()
 
+  let notificationWarning: string | undefined
   if (doc?.owner_id) {
-    await insertNotification(
+    const warn = await tryInsertNotification(
       doc.owner_id,
       'rejection',
       'Document Rejected',
       `Your document "${doc.title}" was rejected.${remarks ? ` Remarks: ${remarks}` : ''}`,
       documentId
     )
+    if (warn) notificationWarning = `Rejection saved, but owner notification failed: ${warn}`
   }
+
+  return { success: true, ...(notificationWarning ? { notificationWarning } : {}) }
 }
 
-export async function submitForApproval(documentId: string) {
-  const { error } = await supabase
-    .from('documents')
-    .update({ status: 'In Review' })
-    .eq('id', documentId)
+export async function submitForApproval(documentId: string, _submitterId: string): Promise<ApprovalResult> {
+  const lookup = await readApprovalRow(documentId)
 
-  if (error) throw error
-
-  // Upsert the approval row so it's always present and set to Pending
-  const { data: existing } = await supabase
-    .from('approvals')
-    .select('id')
-    .eq('document_id', documentId)
-    .single()
-
-  if (existing) {
-    await supabase
+  if (lookup.exists) {
+    const { error: updateError } = await supabase
       .from('approvals')
-      .update({ status: 'Pending' as ApprovalStatus, date: null, notes: null })
+      .update({ status: 'Pending' as ApprovalStatus, approver_id: null, date: null, notes: null })
       .eq('document_id', documentId)
+    if (updateError) throw new Error(`Failed to update approval record: ${updateError.message}`)
   } else {
-    await supabase
+    const { error: insertError } = await supabase
       .from('approvals')
       .insert({
         document_id: documentId,
         step: 'Review',
         status: 'Pending' as ApprovalStatus,
       })
+    if (insertError) throw new Error(`Failed to create approval record: ${insertError.message}`)
+  }
+
+  // Update document status. If this fails, roll back the approval row change.
+  const { error: docError } = await supabase
+    .from('documents')
+    .update({ status: 'In Review' })
+    .eq('id', documentId)
+
+  if (docError) {
+    if (lookup.exists) {
+      await rollbackApprovalRow(lookup.snapshot)
+    } else {
+      const { error: deleteError } = await supabase
+        .from('approvals')
+        .delete()
+        .eq('document_id', documentId)
+      if (deleteError) {
+        console.error(
+          `[approvals] Could not delete newly-inserted approval row after document update failure. ` +
+          `document_id=${documentId}. Error: ${deleteError.message}`
+        )
+      }
+    }
+    throw new Error(`Failed to update document status: ${docError.message}`)
   }
 
   const { data: doc } = await supabase
@@ -207,6 +300,7 @@ export async function submitForApproval(documentId: string) {
     .eq('id', documentId)
     .single()
 
+  let notificationWarning: string | undefined
   if (doc) {
     const { data: reviewers } = await supabase
       .from('users')
@@ -218,14 +312,21 @@ export async function submitForApproval(documentId: string) {
       .map((u: any) => u.id)
       .filter((id: string) => id !== doc.owner_id)
 
+    const warnings: string[] = []
     for (const reviewerId of reviewerIds) {
-      await insertNotification(
+      const warn = await tryInsertNotification(
         reviewerId,
         'review',
         'Document Awaiting Review',
         `"${doc.title}" has been submitted for approval.`,
         documentId
       )
+      if (warn) warnings.push(warn)
+    }
+    if (warnings.length > 0) {
+      notificationWarning = `Submission saved, but ${warnings.length} reviewer notification(s) failed.`
     }
   }
+
+  return { success: true, ...(notificationWarning ? { notificationWarning } : {}) }
 }

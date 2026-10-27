@@ -3,7 +3,7 @@
 export type DocType = 'SOP' | 'Technical Document' | 'Operational Case' | 'Org Info'
 export type DocStatus = 'Draft' | 'In Review' | 'Approved' | 'Rejected'
 export type ApprovalStatus = 'Not Started' | 'Pending' | 'Approved' | 'Rejected'
-export type UserRole = 'Admin' | 'Manager' | 'Support Agent'
+export type UserRole = 'Admin' | 'Manager' | 'Employee'
 export type UserStatus = 'Active' | 'Inactive'
 
 export interface Database {

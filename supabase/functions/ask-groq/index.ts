@@ -136,7 +136,7 @@ serve(async (req) => {
       )
     }
 
-    const systemPrompt = `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System. You help support agents find information from stored SOPs, technical documents, and operational cases.`
+    const systemPrompt = `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System. You help employees find information from stored SOPs, technical documents, and operational cases.`
 
     const userPrompt = `The user asked: "${question}"
 

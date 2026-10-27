@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
 
 interface User {
@@ -63,7 +63,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data, error } = await supabase
         .from('users')
         .select(`
-          *,
+          id,
+          email,
+          name,
+          role_id,
+          department,
+          status,
+          initials,
+          avatar_color,
+          last_active_at,
+          created_at,
+          updated_at,
           roles:role_id (
             name,
             permissions
@@ -75,13 +85,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) throw error
 
       if (data) {
+        // Enforce account status - block Inactive users
+        if (data.status !== 'Active') {
+          console.warn('User account is inactive, signing out:', data.email)
+          await supabase.auth.signOut()
+          setUser(null)
+          setLoading(false)
+          throw new Error('Your account has been deactivated. Please contact an administrator.')
+        }
+
+        // Extract role from the joined query result
+        const roleData = data.roles as { name: string; permissions: string[] } | { name: string; permissions: string[] }[] | null
+        const roleName = Array.isArray(roleData) ? roleData[0]?.name : roleData?.name
+        const rolePermissions = Array.isArray(roleData) ? roleData[0]?.permissions : roleData?.permissions
+
         setUser({
           id: data.id,
           email: data.email,
           name: data.name,
-          role: data.roles?.name || 'Support Agent',
-          permissions: data.roles?.permissions || [],
-          initials: data.initials || data.name.split(' ').map(n => n[0]).join(''),
+          role: roleName || 'Employee',
+          permissions: rolePermissions || [],
+          initials: data.initials || data.name.split(' ').map((n: string) => n[0]).join(''),
           avatar_color: data.avatar_color || 'bg-slate-100 text-slate-600',
         })
       }
@@ -116,7 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     // Use Supabase auth
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     })

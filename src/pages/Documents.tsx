@@ -83,9 +83,16 @@ function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => voi
   }
 
   const handleSubmitForApproval = async () => {
+    if (!user?.id) {
+      alert('You must be logged in to submit a document for approval.')
+      return
+    }
     try {
       setSubmitting(true)
-      await submitForApproval(doc.id)
+      const result = await submitForApproval(doc.id, user.id)
+      if (result.notificationWarning) {
+        console.warn('[Documents]', result.notificationWarning)
+      }
       await logActivity({
         user_id: user?.id,
         action: 'edit',
@@ -439,7 +446,9 @@ export function Documents() {
                   </tr>
                 ) : (
                   sorted.map(doc => {
-                    const StatusIcon = STATUS_ICONS[doc.status]
+                    const statusKey = doc.status as DocStatus
+                    const typeKey = doc.type as DocType
+                    const StatusIcon = STATUS_ICONS[statusKey]
                     return (
                       <tr
                         key={doc.id}
@@ -456,7 +465,7 @@ export function Documents() {
 
                         {/* type */}
                         <td className="py-3.5 px-3">
-                          <span className={`text-[10px] font-semibold px-2 py-1 rounded ${TYPE_STYLES[doc.type]}`}>
+                          <span className={`text-[10px] font-semibold px-2 py-1 rounded ${TYPE_STYLES[typeKey]}`}>
                             {doc.type}
                           </span>
                         </td>
@@ -468,7 +477,7 @@ export function Documents() {
                         <td className="py-3.5 px-3 hidden md:table-cell">
                           <div className="flex items-center gap-2">
                             <div className={`w-6 h-6 rounded-full text-[10px] font-bold flex items-center justify-center flex-shrink-0 ${doc.users?.avatar_color || 'bg-slate-100 text-slate-600'}`}>
-                              {doc.users?.initials || doc.users?.name?.split(' ').map(n => n[0]).join('') || 'U'}
+                              {doc.users?.initials || doc.users?.name?.split(' ').map((n: string) => n[0]).join('') || 'U'}
                             </div>
                             <span className="text-[12px] text-slate-600">{doc.users?.name || 'Unknown'}</span>
                           </div>
@@ -476,7 +485,7 @@ export function Documents() {
 
                         {/* status */}
                         <td className="py-3.5 px-3">
-                          <div className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded ${STATUS_STYLES[doc.status]}`}>
+                          <div className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-1 rounded ${STATUS_STYLES[statusKey]}`}>
                             <StatusIcon className="w-3 h-3" />
                             {doc.status}
                           </div>

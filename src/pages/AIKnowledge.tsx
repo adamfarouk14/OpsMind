@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
 import { searchDocuments } from '../services/documents'
-import { supabase } from '../lib/supabase'
 import {
   Sparkles,
   Send,
@@ -9,7 +8,6 @@ import {
   Lightbulb,
   BookOpen,
   Search,
-  ChevronRight,
 } from 'lucide-react'
 
 // Search with multiple strategies to maximize recall
@@ -68,7 +66,7 @@ async function askGroq(question: string, contextDocs: any[]): Promise<string> {
 
   const hasContext = contextDocs.length > 0
 
-  const systemPrompt = `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System. You help support agents find information from stored SOPs, technical documents, and operational cases.`
+  const systemPrompt = `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System. You help employees find information from stored SOPs, technical documents, and operational cases.`
 
   const userPrompt = hasContext
     ? `The user asked: "${question}"
@@ -187,7 +185,7 @@ export function AIKnowledge() {
   }
 
   const suggestedQuestions = [
-    "How do I troubleshoot a POS that won't power on?",
+    "How do I troubleshoot a POS device that won't power on?",
     'What are the steps for receipt printer setup?',
     'How do I configure a barcode scanner?',
     'What is the SOP for device replacement?',

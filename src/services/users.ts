@@ -1,11 +1,21 @@
 import { supabase } from '../lib/supabase'
-import type { UserWithRole, UserRole, UserStatus } from '../types/database'
+import type { UserWithRole, UserStatus } from '../types/database'
 
 export async function getUsers(): Promise<UserWithRole[]> {
   const { data, error } = await supabase
     .from('users')
     .select(`
-      *,
+      id,
+      email,
+      name,
+      role_id,
+      department,
+      status,
+      initials,
+      avatar_color,
+      last_active_at,
+      created_at,
+      updated_at,
       roles:role_id (
         name,
         permissions
@@ -14,14 +24,24 @@ export async function getUsers(): Promise<UserWithRole[]> {
     .order('created_at', { ascending: false })
 
   if (error) throw error
-  return data as UserWithRole[]
+  return (data || []) as unknown as UserWithRole[]
 }
 
 export async function getUserById(id: string): Promise<UserWithRole> {
   const { data, error } = await supabase
     .from('users')
     .select(`
-      *,
+      id,
+      email,
+      name,
+      role_id,
+      department,
+      status,
+      initials,
+      avatar_color,
+      last_active_at,
+      created_at,
+      updated_at,
       roles:role_id (
         name,
         permissions
@@ -31,7 +51,7 @@ export async function getUserById(id: string): Promise<UserWithRole> {
     .single()
 
   if (error) throw error
-  return data as UserWithRole
+  return data as unknown as UserWithRole
 }
 
 export async function createUser(user: {
@@ -46,7 +66,19 @@ export async function createUser(user: {
   const { data, error } = await supabase
     .from('users')
     .insert(user)
-    .select()
+    .select(`
+      id,
+      email,
+      name,
+      role_id,
+      department,
+      status,
+      initials,
+      avatar_color,
+      last_active_at,
+      created_at,
+      updated_at
+    `)
     .single()
 
   if (error) throw error
@@ -65,17 +97,31 @@ export async function updateUser(id: string, updates: {
     .from('users')
     .update(updates)
     .eq('id', id)
-    .select()
+    .select(`
+      id,
+      email,
+      name,
+      role_id,
+      department,
+      status,
+      initials,
+      avatar_color,
+      last_active_at,
+      created_at,
+      updated_at
+    `)
     .single()
 
   if (error) throw error
   return data
 }
 
-export async function deleteUser(id: string) {
+export async function deactivateUser(id: string) {
+  // Direct update using authenticated user's permissions
+  // Since we don't have service_role access, we'll update directly
   const { error } = await supabase
     .from('users')
-    .delete()
+    .update({ status: 'Inactive' })
     .eq('id', id)
 
   if (error) throw error

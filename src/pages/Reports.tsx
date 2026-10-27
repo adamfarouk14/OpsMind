@@ -10,7 +10,6 @@ import {
   Calendar,
   Download,
   Filter,
-  ChevronDown,
   BarChart3,
   PieChart,
   Loader2,
@@ -18,7 +17,6 @@ import {
 
 export function Reports() {
   const [dateRange, setDateRange] = useState<'30D' | '90D' | '1Y'>('30D')
-  const [activeReport, setActiveReport] = useState<'overview' | 'by-type' | 'approvals' | 'activity'>('overview')
   const [documents, setDocuments] = useState<any[]>([])
   const [activityLogs, setActivityLogs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)

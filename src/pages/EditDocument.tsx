@@ -440,7 +440,7 @@ export function EditDocument() {
                   Version History
                 </h2>
                 <div className="space-y-2">
-                  {doc.versions.map((v, i) => (
+                  {doc.versions.map((v: { version: string; created_at: string; notes: string }, i: number) => (
                     <div key={i} className="flex items-start gap-2 pb-2 border-b border-slate-100 last:border-0 last:pb-0">
                       <div className="w-5 h-5 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0 mt-0.5">
                         <GitBranch className="w-2.5 h-2.5" />
@@ -451,7 +451,7 @@ export function EditDocument() {
                           <p className="text-[10px] text-slate-400">{v.created_at ? new Date(v.created_at).toLocaleDateString() : ''}</p>
                         </div>
                         <p className="text-[10px] text-slate-600 truncate">{v.notes}</p>
-                        <p className="text-[10px] text-slate-400">by {v.users?.name || 'Unknown'}</p>
+                        <p className="text-[10px] text-slate-400">by Unknown</p>
                       </div>
                     </div>
                   ))}

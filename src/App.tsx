@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/layout/Layout'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { Login } from './pages/Login'
@@ -33,7 +33,11 @@ function App() {
           <Route path="documents/:id/edit" element={<EditDocument />} />
           <Route path="search" element={<Search />} />
           <Route path="ai-knowledge" element={<AIKnowledge />} />
-          <Route path="approvals" element={<Approvals />} />
+          <Route path="approvals" element={
+            <ProtectedRoute requiredRole="Manager">
+              <Approvals />
+            </ProtectedRoute>
+          } />
           <Route path="reports" element={<Reports />} />
           <Route path="activity-logs" element={<ActivityLogs />} />
           <Route path="administration" element={

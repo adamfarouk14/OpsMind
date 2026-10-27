@@ -1,8 +1,34 @@
 import { supabase } from '../lib/supabase'
 import type { DocType, DocStatus, DocumentWithOwner, DocumentWithVersions, DocumentWithApprovals } from '../types/database'
 
+// Access control:
+// Admin/Manager can see all document statuses.
+// Employee can only see Approved documents.
+// RLS on the database enforces the same rules server-side.
+const ELEVATED_ROLES = ['Admin', 'Manager'] as const
+
+async function getCurrentUserRole(): Promise<string> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return 'Employee'
+
+  const { data } = await supabase
+    .from('users')
+    .select('roles:role_id(name)')
+    .eq('id', user.id)
+    .single()
+
+  return (data as any)?.roles?.name ?? 'Employee'
+}
+
+async function isElevatedRole(): Promise<boolean> {
+  const role = await getCurrentUserRole()
+  return ELEVATED_ROLES.includes(role as any)
+}
+
 export async function getDocuments(): Promise<DocumentWithOwner[]> {
-  const { data, error } = await supabase
+  const elevated = await isElevatedRole()
+
+  let query = supabase
     .from('documents')
     .select(`
       *,
@@ -14,12 +40,20 @@ export async function getDocuments(): Promise<DocumentWithOwner[]> {
     `)
     .order('updated_at', { ascending: false })
 
+  if (!elevated) {
+    query = query.eq('status', 'Approved') as any
+  }
+
+  const { data, error } = await query
   if (error) throw error
   return data as DocumentWithOwner[]
 }
 
 export async function getDocumentById(id: string): Promise<DocumentWithVersions & DocumentWithApprovals> {
-  const { data, error } = await supabase
+  const role = await getCurrentUserRole()
+  const isElevated = ELEVATED_ROLES.includes(role as any)
+
+  let baseQuery = supabase
     .from('documents')
     .select(`
       *,
@@ -30,11 +64,15 @@ export async function getDocumentById(id: string): Promise<DocumentWithVersions 
       )
     `)
     .eq('id', id)
-    .single()
+
+  if (!isElevated) {
+    baseQuery = baseQuery.eq('status', 'Approved') as any
+  }
+
+  const { data, error } = await baseQuery.single()
 
   if (error) throw error
 
-  // Get versions with author names
   const { data: versions } = await supabase
     .from('document_versions')
     .select(`
@@ -48,7 +86,6 @@ export async function getDocumentById(id: string): Promise<DocumentWithVersions 
     .eq('document_id', id)
     .order('created_at', { ascending: false })
 
-  // Get approvals
   const { data: approvals } = await supabase
     .from('approvals')
     .select('*')
@@ -132,7 +169,9 @@ export async function createDocumentVersion(documentId: string, version: {
 }
 
 export async function getDocumentsByType(type: DocType): Promise<DocumentWithOwner[]> {
-  const { data, error } = await supabase
+  const elevated = await isElevatedRole()
+
+  let query = supabase
     .from('documents')
     .select(`
       *,
@@ -145,11 +184,20 @@ export async function getDocumentsByType(type: DocType): Promise<DocumentWithOwn
     .eq('type', type)
     .order('updated_at', { ascending: false })
 
+  if (!elevated) {
+    query = query.eq('status', 'Approved') as any
+  }
+
+  const { data, error } = await query
   if (error) throw error
   return data as DocumentWithOwner[]
 }
 
 export async function getDocumentsByStatus(status: DocStatus): Promise<DocumentWithOwner[]> {
+  // Employees are locked to Approved — return empty for other statuses
+  const role = await getCurrentUserRole()
+  if (!ELEVATED_ROLES.includes(role as any) && status !== 'Approved') return []
+
   const { data, error } = await supabase
     .from('documents')
     .select(`
@@ -168,7 +216,9 @@ export async function getDocumentsByStatus(status: DocStatus): Promise<DocumentW
 }
 
 export async function searchDocuments(query: string): Promise<DocumentWithOwner[]> {
-  const { data, error } = await supabase
+  const elevated = await isElevatedRole()
+
+  let baseQuery = supabase
     .from('documents')
     .select(`
       *,
@@ -181,6 +231,11 @@ export async function searchDocuments(query: string): Promise<DocumentWithOwner[
     .or(`title.ilike.%${query}%,code.ilike.%${query}%,description.ilike.%${query}%,content.ilike.%${query}%`)
     .order('updated_at', { ascending: false })
 
+  if (!elevated) {
+    baseQuery = baseQuery.eq('status', 'Approved') as any
+  }
+
+  const { data, error } = await baseQuery
   if (error) throw error
   return data as DocumentWithOwner[]
 }
