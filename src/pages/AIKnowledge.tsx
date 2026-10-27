@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { searchDocuments } from '../services/documents'
+import { supabase } from '../lib/supabase'
 import {
   Sparkles,
   Send,
@@ -59,62 +60,21 @@ interface Message {
   }>
 }
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY
-
 async function askGroq(question: string, contextDocs: any[]): Promise<string> {
-  if (!GROQ_API_KEY) throw new Error('Groq API key not configured')
+  const { data, error } = await supabase.functions.invoke('ask-groq', {
+    body: { question, contextDocs }
+  })
 
-  const hasContext = contextDocs.length > 0
-
-  const systemPrompt = `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System. You help employees find information from stored SOPs, technical documents, and operational cases.`
-
-  const userPrompt = hasContext
-    ? `The user asked: "${question}"
-
-Here are the relevant documents found in the knowledge base:
-
-${contextDocs.map(doc =>
-  `Title: ${doc.title} (${doc.code})\nType: ${doc.type}\nDescription: ${doc.description || 'N/A'}\nContent: ${(doc.content || '').slice(0, 1000)}`
-).join('\n\n---\n\n')}
-
-Answer the user's question using these documents as your primary source. Reference specific document titles when relevant. Be clear, helpful, and concise.`
-    : `The user asked: "${question}"
-
-No specific documents were found in the knowledge base for this query. Answer helpfully using your general knowledge. If it's a greeting or general question, respond naturally. If it's a technical IT support question, answer from general knowledge and suggest adding relevant documents to OpsMind.`
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 20000)
-
-  let response: Response
-  try {
-    response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: 'openai/gpt-oss-120b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 1024,
-      }),
-    })
-  } finally {
-    clearTimeout(timeout)
+  if (error) {
+    console.error('[askGroq] Edge Function error:', error)
+    throw new Error(error.message || 'AI service request failed')
   }
 
-  if (!response.ok) {
-    const err = await response.json()
-    throw new Error(err?.error?.message || 'Groq API error')
+  if (!data || typeof data.answer !== 'string') {
+    throw new Error('Invalid response from AI service')
   }
 
-  const data = await response.json()
-  return data.choices?.[0]?.message?.content || 'No response generated.'
+  return data.answer
 }
 
 export function AIKnowledge() {
