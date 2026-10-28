@@ -26,34 +26,52 @@ function isValidDoc(doc: unknown): doc is ContextDoc {
 }
 
 serve(async (req) => {
+  const requestId = crypto.randomUUID().substring(0, 8)
+  console.log(`[ask-groq:${requestId}] Function invoked`)
+  
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   const authHeader = req.headers.get('Authorization')
+  const apiKeyHeader = req.headers.get('apikey')
   
-  // Optional authentication - log for debugging
-  if (authHeader) {
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
+  console.log(`[ask-groq:${requestId}] Headers check:`, {
+    hasAuth: !!authHeader,
+    hasApiKey: !!apiKeyHeader,
+    authPrefix: authHeader?.substring(0, 20) || 'none'
+  })
+  
+  if (!authHeader) {
+    console.error(`[ask-groq:${requestId}] No Authorization header`)
+    return new Response(
+      JSON.stringify({ error: 'Unauthorized - No auth header' }),
+      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (user) {
-      console.log('[ask-groq] Authenticated user:', user.email)
-    } else {
-      console.log('[ask-groq] No user found, proceeding without auth')
-    }
-  } else {
-    console.log('[ask-groq] No Authorization header provided')
   }
+
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+    { global: { headers: { Authorization: authHeader } } }
+  )
+
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  
+  if (authError || !user) {
+    console.error(`[ask-groq:${requestId}] Auth verification failed:`, authError?.message || 'No user')
+    return new Response(
+      JSON.stringify({ error: 'Unauthorized - Invalid token' }),
+      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    )
+  }
+  
+  console.log(`[ask-groq:${requestId}] Authenticated user:`, user.email)
 
   try {
     const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY')
     if (!GROQ_API_KEY) {
-      console.error('GROQ_API_KEY secret is not set on this function deployment')
+      console.error(`[ask-groq:${requestId}] GROQ_API_KEY not configured`)
       return new Response(
         JSON.stringify({ error: 'AI service is not available' }),
         { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -99,6 +117,11 @@ serve(async (req) => {
 
     const { question, contextDocs } = body as { question: unknown; contextDocs: unknown }
 
+    console.log(`[ask-groq:${requestId}] Request parsed:`, {
+      questionLength: typeof question === 'string' ? question.length : 0,
+      docsCount: Array.isArray(contextDocs) ? contextDocs.length : 0
+    })
+
     if (!question || typeof question !== 'string' || question.trim().length === 0) {
       return new Response(
         JSON.stringify({ error: 'Missing or invalid question' }),
@@ -126,6 +149,7 @@ serve(async (req) => {
       }))
 
     if (safeDocs.length === 0) {
+      console.log(`[ask-groq:${requestId}] No documents found, returning generic response`)
       return new Response(
         JSON.stringify({
           answer: "I couldn't find any relevant documents in the OpsMind knowledge base for your question. Please make sure the relevant SOPs, technical guides, or operational cases have been added to OpsMind, then try again.",
@@ -133,6 +157,8 @@ serve(async (req) => {
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
+
+    console.log(`[ask-groq:${requestId}] Calling Groq API with ${safeDocs.length} documents`)
 
     const systemPrompt = `You are OpsMind AI, a helpful assistant for a Technical Support Knowledge Management System. You help employees find information from stored SOPs, technical documents, and operational cases.`
 
@@ -165,6 +191,10 @@ Answer the user's question using these documents as your primary source. Referen
 
     if (!groqResponse.ok) {
       const err = await groqResponse.json()
+      console.error(`[ask-groq:${requestId}] Groq API error:`, {
+        status: groqResponse.status,
+        error: err?.error?.message || 'Unknown'
+      })
       return new Response(
         JSON.stringify({ error: err?.error?.message || 'Groq API error' }),
         { status: groqResponse.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -174,11 +204,14 @@ Answer the user's question using these documents as your primary source. Referen
     const data = await groqResponse.json()
     const answer = data.choices?.[0]?.message?.content || 'No response generated.'
 
+    console.log(`[ask-groq:${requestId}] Success, returning answer (${answer.length} chars)`)
+
     return new Response(
       JSON.stringify({ answer }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (err) {
+    console.error(`[ask-groq:${requestId}] Unexpected error:`, (err as Error).message)
     return new Response(
       JSON.stringify({ error: (err as Error).message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

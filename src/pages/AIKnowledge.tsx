@@ -13,10 +13,12 @@ import {
 
 // Search with multiple strategies to maximize recall
 async function smartSearch(query: string) {
+  console.log('[smartSearch] Searching for:', query)
   const results: any[] = []
   const seen = new Set<string>()
 
   const addUnique = (docs: any[]) => {
+    console.log('[smartSearch] Adding docs:', docs.length)
     for (const doc of docs) {
       if (!seen.has(doc.id)) {
         seen.add(doc.id)
@@ -28,8 +30,11 @@ async function smartSearch(query: string) {
   // Strategy 1: full phrase search
   try {
     const r = await searchDocuments(query)
+    console.log('[smartSearch] Full phrase results:', r.length)
     addUnique(r)
-  } catch {}
+  } catch (err) {
+    console.error('[smartSearch] Full phrase search failed:', err)
+  }
 
   // Strategy 2: search each meaningful word separately
   const words = query
@@ -37,13 +42,19 @@ async function smartSearch(query: string) {
     .map(w => w.trim())
     .filter(w => w.length > 2)
 
+  console.log('[smartSearch] Searching words:', words)
+
   for (const word of words) {
     try {
       const r = await searchDocuments(word)
+      console.log(`[smartSearch] Word "${word}" results:`, r.length)
       addUnique(r)
-    } catch {}
+    } catch (err) {
+      console.error(`[smartSearch] Word "${word}" search failed:`, err)
+    }
   }
 
+  console.log('[smartSearch] Total unique results:', results.length)
   return results.slice(0, 5)
 }
 
@@ -63,27 +74,42 @@ interface Message {
 async function askGroq(question: string, contextDocs: any[]): Promise<string> {
   console.log('[askGroq] Calling Edge Function with:', { question, docsCount: contextDocs.length })
   
-  // Get the current session to include auth token
-  const { data: { session } } = await supabase.auth.getSession()
+  // Check if user is authenticated before invoking
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession()
   
-  if (!session) {
-    console.error('[askGroq] No active session found')
-    throw new Error('You must be logged in to use the AI Assistant')
+  if (sessionError) {
+    console.error('[askGroq] Session error:', sessionError.message)
+    throw new Error('Authentication error. Please try logging in again.')
   }
   
-  console.log('[askGroq] Session found, invoking function...')
+  if (!session) {
+    console.error('[askGroq] No active session')
+    throw new Error('You must be logged in to use the AI Assistant.')
+  }
   
+  console.log('[askGroq] Session valid, invoking function')
+  
+  // Supabase SDK automatically includes auth headers - don't override them
   const { data, error } = await supabase.functions.invoke('ask-groq', {
     body: { question, contextDocs }
   })
 
   if (error) {
     console.error('[askGroq] Edge Function error:', error)
-    console.error('[askGroq] Error details:', JSON.stringify(error, null, 2))
+    console.error('[askGroq] Error context:', { 
+      name: error.name,
+      message: error.message,
+      hasSession: !!session
+    })
+    
+    // Provide specific error message based on error type
+    if (error.message?.includes('FunctionsHttpError')) {
+      throw new Error('AI service returned an error. Please try again or contact support.')
+    }
     throw new Error(error.message || 'AI service request failed')
   }
 
-  console.log('[askGroq] Response data:', data)
+  console.log('[askGroq] Response received:', { hasData: !!data, hasAnswer: !!data?.answer })
 
   if (!data || typeof data.answer !== 'string') {
     console.error('[askGroq] Invalid response format:', data)
@@ -147,11 +173,30 @@ export function AIKnowledge() {
 
       setMessages(prev => [...prev, aiMessage])
     } catch (err) {
-      console.error('[AIKnowledge] Request failed:', (err as Error).message)
+      console.error('[AIKnowledge] Request failed:', err)
+      
+      // Extract useful error message without exposing sensitive data
+      let errorMessage = 'Something went wrong while processing your request. Please try again.'
+      
+      const error = err as any
+      if (error?.message) {
+        // Show specific errors that help users understand the problem
+        if (error.message.includes('Unauthorized') || error.message.includes('logged in')) {
+          errorMessage = 'Please log in to use the AI Assistant.'
+        } else if (error.message.includes('AI service') || error.message.includes('not available')) {
+          errorMessage = 'AI service is temporarily unavailable. Please try again later.'
+        } else if (error.message.includes('network') || error.message.includes('fetch')) {
+          errorMessage = 'Network error. Please check your connection and try again.'
+        } else {
+          // Show the actual error for other cases (safe, non-sensitive)
+          errorMessage = `Error: ${error.message}`
+        }
+      }
+      
       const errMessage: Message = {
         id: Date.now() + 1,
         type: 'ai',
-        content: 'Something went wrong while processing your request. Please try again.',
+        content: errorMessage,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }
       setMessages(prev => [...prev, errMessage])

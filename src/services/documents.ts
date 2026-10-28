@@ -217,6 +217,7 @@ export async function getDocumentsByStatus(status: DocStatus): Promise<DocumentW
 
 export async function searchDocuments(query: string): Promise<DocumentWithOwner[]> {
   const elevated = await isElevatedRole()
+  console.log('[searchDocuments] Role check:', { elevated })
 
   let baseQuery = supabase
     .from('documents')
@@ -233,9 +234,18 @@ export async function searchDocuments(query: string): Promise<DocumentWithOwner[
 
   if (!elevated) {
     baseQuery = baseQuery.eq('status', 'Approved') as any
+    console.log('[searchDocuments] Non-elevated role: filtering to Approved only')
+  } else {
+    console.log('[searchDocuments] Elevated role: showing all statuses')
   }
 
   const { data, error } = await baseQuery
-  if (error) throw error
+  
+  if (error) {
+    console.error('[searchDocuments] Query error:', error)
+    throw error
+  }
+  
+  console.log('[searchDocuments] Results:', data?.length || 0)
   return data as DocumentWithOwner[]
 }
