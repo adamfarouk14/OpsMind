@@ -61,16 +61,32 @@ interface Message {
 }
 
 async function askGroq(question: string, contextDocs: any[]): Promise<string> {
+  console.log('[askGroq] Calling Edge Function with:', { question, docsCount: contextDocs.length })
+  
+  // Get the current session to include auth token
+  const { data: { session } } = await supabase.auth.getSession()
+  
+  if (!session) {
+    console.error('[askGroq] No active session found')
+    throw new Error('You must be logged in to use the AI Assistant')
+  }
+  
+  console.log('[askGroq] Session found, invoking function...')
+  
   const { data, error } = await supabase.functions.invoke('ask-groq', {
     body: { question, contextDocs }
   })
 
   if (error) {
     console.error('[askGroq] Edge Function error:', error)
+    console.error('[askGroq] Error details:', JSON.stringify(error, null, 2))
     throw new Error(error.message || 'AI service request failed')
   }
 
+  console.log('[askGroq] Response data:', data)
+
   if (!data || typeof data.answer !== 'string') {
+    console.error('[askGroq] Invalid response format:', data)
     throw new Error('Invalid response from AI service')
   }
 

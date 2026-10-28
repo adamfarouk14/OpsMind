@@ -1,5 +1,5 @@
 [functions.ask-groq]
-verify_jwt = true
+verify_jwt = false
 
 [functions.create-user]
 verify_jwt = false
