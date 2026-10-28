@@ -96,6 +96,25 @@ async function askGroq(question: string, contextDocs: any[]): Promise<string> {
 
   if (error) {
     console.error('[askGroq] Edge Function error:', error)
+    
+    // Extract actual HTTP response details from FunctionsHttpError
+    if (error.context) {
+      const status = error.context.status
+      const statusText = error.context.statusText
+      console.error('[askGroq] HTTP Response:', { status, statusText })
+      
+      // Try to read response body
+      error.context.json().then((body: any) => {
+        console.error('[askGroq] Response body:', body)
+      }).catch(() => {
+        error.context.text().then((text: string) => {
+          console.error('[askGroq] Response text:', text)
+        }).catch(() => {
+          console.error('[askGroq] Could not read response body')
+        })
+      })
+    }
+    
     console.error('[askGroq] Error context:', { 
       name: error.name,
       message: error.message,
