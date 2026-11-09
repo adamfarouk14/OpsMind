@@ -27,10 +27,12 @@ export function Login() {
       navigate('/')
     } catch (err: any) {
       console.error('Login error:', err?.code ?? 'login_failed')
-      setError(
+         setError(
         err?.code === 'rate_limited'
           ? 'Too many sign-in attempts. Please wait a few minutes.'
-          : 'Invalid username or password',
+          : err?.code === 'invalid_credentials'
+            ? 'Invalid username or password'
+            : 'Could not reach the sign-in service. Check your connection and try again.',
       )
     } finally {
       setLoading(false)
