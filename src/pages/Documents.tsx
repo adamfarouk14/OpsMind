@@ -116,7 +116,7 @@ function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => voi
     if (!window.confirm(`Delete "${doc.title}"? This cannot be undone.`)) return
     try {
       setDeleting(true)
-      await deleteDocument(doc.id)
+      const { remainingFiles } = await deleteDocument(doc.id)
       await logActivity({
         user_id: user?.id,
         action: 'delete',
@@ -127,6 +127,9 @@ function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => voi
         details: `Deleted ${doc.type}: ${doc.title}`,
       })
       onDeleted(doc.id)
+      if (remainingFiles.length > 0) {
+        alert(`Document deleted, but ${remainingFiles.length} stored file(s) could not be removed from storage.`)
+      }
     } catch (err) {
       console.error('Failed to delete document:', err)
       alert('Failed to delete document: ' + (err as Error).message)

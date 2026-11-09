@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import type { DocType } from '../types/database'
 import { getDocumentById, updateDocument, createDocumentVersion } from '../services/documents'
+import { findPendingRevision } from '../services/revisions'
+import { nextVersionStamp } from '../lib/versions'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
@@ -10,6 +12,7 @@ import { ArrowLeft, Save, X, AlertCircle, ChevronDown, GitBranch, Loader2, Uploa
 export function EditDocument() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const { user } = useAuth()
   const [doc, setDoc] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -30,6 +33,7 @@ export function EditDocument() {
   const [showDiscardModal, setShowDiscardModal] = useState(false)
   const [createNewVersion, setCreateNewVersion] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [pendingRevision, setPendingRevision] = useState<{ id: string; version: string } | null>(null)
 
   useEffect(() => {
     async function loadData() {
@@ -47,6 +51,16 @@ export function EditDocument() {
           versionNotes: '',
           category: documentData.tags?.find((t: string) => t.startsWith('Category: '))?.replace('Category: ', '') || '',
         })
+        if (new URLSearchParams(location.search).get('newVersion')) {
+          // arrived from "New Version": edits here define the new revision
+          setCreateNewVersion(true)
+        }
+
+        const pending = findPendingRevision(
+          documentData.versions as Array<{ id: string; version: string; status?: string | null }>,
+          documentData.version
+        )
+        setPendingRevision(pending ? { id: pending.id, version: pending.version } : null)
       } catch (err) {
         setError('Failed to load document: ' + (err as Error).message)
         console.error('Error loading document:', err)
@@ -57,15 +71,14 @@ export function EditDocument() {
     loadData()
   }, [id])
 
-  const incrementVersion = (currentVersion: string): string => {
-    const match = currentVersion.match(/v(\d+)\.(\d+)/)
-    if (match) {
-      const major = parseInt(match[1])
-      const minor = parseInt(match[2])
-      return `v${major}.${minor + 1}`
-    }
-    return 'v1.1'
-  }
+  const suggestedVersion = doc
+    ? nextVersionStamp([
+        doc.version,
+        ...(doc.versions ?? []).map((v: { version: string }) => v.version),
+      ])
+    : 'v1.0'
+  const targetVersion = suggestedVersion
+  const mustRevise = doc?.status === 'Approved'
 
   if (loading) {
     return (
@@ -114,11 +127,19 @@ export function EditDocument() {
       return
     }
 
+    if (createNewVersion && pendingRevision) {
+      setError(`Revision ${pendingRevision.version} is already awaiting approval. It must be approved or rejected before another revision can be saved.`)
+      return
+    }
+    if (!createNewVersion && doc.status === 'Approved') {
+      setError('This document is already published. Tick “Create New Version” so your changes go through approval instead of replacing it silently.')
+      return
+    }
+
     try {
       setSaving(true)
       setError(null)
 
-      const newVersion = createNewVersion ? incrementVersion(doc.version) : doc.version
       let tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t)
       if (form.type === 'Operational Case' && form.category.trim()) {
         tagsArray = tagsArray.filter(t => !t.startsWith('Category: '))
@@ -126,6 +147,7 @@ export function EditDocument() {
       }
 
       let contentWithFile = form.content
+      let filePath: string | null = null
 
       // Upload new file if provided
       if (file) {
@@ -135,39 +157,57 @@ export function EditDocument() {
           .from('documents')
           .upload(path, file, { upsert: false })
         if (uploadError) throw new Error('File upload failed: ' + uploadError.message)
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(path)
-        contentWithFile = `${form.content}\n\n[Attached file: ${urlData.publicUrl}]`
+        filePath = path
+        contentWithFile = `${form.content}\n\n[Attached file: ${path}]`
       }
 
-      if (createNewVersion && form.versionNotes.trim()) {
+      if (createNewVersion) {
+        // Staged revision: the live document keeps its approved content until an
+        // admin approves this row from the Approvals page.
         await createDocumentVersion(doc.id, {
-          version: newVersion,
+          version: targetVersion,
           author_id: user.id,
           notes: form.versionNotes,
+          title: form.title,
+          description: form.description,
+          content: contentWithFile,
+          type: form.type,
+          status: 'In Review',
+          tags: tagsArray,
+          file_path: filePath,
+          file_name: file?.name ?? null,
+        })
+
+        await logActivity({
+          user_id: user.id,
+          action: 'edit',
+          target_type: 'document',
+          target_id: doc.id,
+          target_title: form.title,
+          target_code: form.code,
+          details: `Submitted ${targetVersion} for approval: ${form.versionNotes}`,
+        })
+      } else {
+        await updateDocument(doc.id, {
+          title: form.title,
+          code: form.code,
+          type: form.type,
+          version: doc.version,
+          description: form.description,
+          content: contentWithFile,
+          tags: tagsArray,
+        })
+
+        await logActivity({
+          user_id: user.id,
+          action: 'edit',
+          target_type: 'document',
+          target_id: doc.id,
+          target_title: form.title,
+          target_code: form.code,
+          details: `Edited document: ${form.title}`,
         })
       }
-
-      await updateDocument(doc.id, {
-        title: form.title,
-        code: form.code,
-        type: form.type,
-        version: newVersion,
-        description: form.description,
-        content: contentWithFile,
-        tags: tagsArray,
-      })
-
-      await logActivity({
-        user_id: user.id,
-        action: 'edit',
-        target_type: 'document',
-        target_id: doc.id,
-        target_title: form.title,
-        target_code: form.code,
-        details: createNewVersion
-          ? `Updated document to ${newVersion}: ${form.versionNotes}`
-          : `Edited document: ${form.title}`,
-      })
 
       navigate(`/documents/${doc.id}`)
     } catch (err) {
@@ -221,6 +261,28 @@ export function EditDocument() {
             <p className="text-sm text-red-700">{error}</p>
           </div>
         )}
+
+        {pendingRevision && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <p className="text-sm font-semibold text-amber-900">
+              Revision {pendingRevision.version} is awaiting approval
+            </p>
+            <p className="text-xs text-amber-700 mt-1">
+              Only one revision can be pending per document. An admin must approve or reject it before
+              a new revision can be saved. The document currently shown to users is unchanged.
+            </p>
+          </div>
+        )}
+
+        {!pendingRevision && mustRevise && !createNewVersion && (
+          <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+            <p className="text-sm font-semibold text-blue-900">This document is already published</p>
+            <p className="text-xs text-blue-700 mt-1">
+              Tick “Create New Version” to propose changes as a revision awaiting approval. Saving without it
+              is blocked so approved content can never be replaced silently.
+            </p>
+          </div>
+        )}
         {/* header */}
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -246,7 +308,13 @@ export function EditDocument() {
             </button>
             <button
               onClick={handleSave}
-              disabled={saving || (createNewVersion && !form.versionNotes.trim())}
+              disabled={
+                saving ||
+                (createNewVersion && (
+                  !!pendingRevision ||
+                  !form.versionNotes.trim()
+                ))
+              }
               className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
             >
               {saving ? (
@@ -257,7 +325,7 @@ export function EditDocument() {
               ) : (
                 <>
                   <Save className="w-3.5 h-3.5" />
-                  {createNewVersion ? `Save as ${incrementVersion(doc.version)}` : 'Save Changes'}
+                  {createNewVersion ? `Submit ${targetVersion} for approval` : 'Save Changes'}
                 </>
               )}
             </button>
@@ -476,12 +544,26 @@ export function EditDocument() {
                     Create New Version
                   </label>
                   <p className="text-xs text-slate-500">
-                    {createNewVersion 
-                      ? `Will create ${incrementVersion(doc.version)} and preserve current version` 
+                    {createNewVersion
+                      ? `Saves ${targetVersion} as a revision awaiting approval. The live document is unchanged until an admin approves it.`
                       : 'Will update current version without creating a new one'}
                   </p>
                 </div>
               </div>
+
+              {createNewVersion && (
+                <div className="mb-4">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                    Version Number
+                  </label>
+                  <input
+                    type="text"
+                    value={targetVersion}
+                    readOnly
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-600 cursor-not-allowed font-semibold"
+                  />
+                </div>
+              )}
 
               {createNewVersion && (
                 <div>
@@ -509,8 +591,8 @@ export function EditDocument() {
                 <div>
                   <p className="text-xs font-semibold text-blue-900 mb-1">Saving Changes</p>
                   <p className="text-xs text-blue-700 leading-relaxed">
-                    {createNewVersion 
-                      ? `A new version (${incrementVersion(doc.version)}) will be created and the current version will be preserved.`
+                    {createNewVersion
+                      ? `${targetVersion} is stored as a pending revision. Support Agents keep seeing ${doc.version} until an admin approves it.`
                       : 'Changes will update the current version directly without creating a new version.'}
                   </p>
                 </div>

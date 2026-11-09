@@ -3,7 +3,7 @@
 export type DocType = 'SOP' | 'Technical Document' | 'Operational Case' | 'Org Info'
 export type DocStatus = 'Draft' | 'In Review' | 'Approved' | 'Rejected'
 export type ApprovalStatus = 'Not Started' | 'Pending' | 'Approved' | 'Rejected'
-export type UserRole = 'Admin' | 'Manager' | 'Employee'
+export type UserRole = 'Admin' | 'Manager' | 'Support Agent'
 export type UserStatus = 'Active' | 'Inactive'
 
 export interface Database {
@@ -39,6 +39,7 @@ export interface Database {
         Row: {
           id: string
           email: string
+          username: string
           name: string
           password_hash: string
           role_id: string | null
@@ -53,6 +54,7 @@ export interface Database {
         Insert: {
           id?: string
           email: string
+          username: string
           name: string
           password_hash: string
           role_id?: string | null
@@ -67,6 +69,7 @@ export interface Database {
         Update: {
           id?: string
           email?: string
+          username?: string
           name?: string
           password_hash?: string
           role_id?: string | null
@@ -131,6 +134,14 @@ export interface Database {
           author_id: string | null
           notes: string | null
           created_at: string
+          file_path: string | null
+          file_name: string | null
+          title: string | null
+          description: string | null
+          content: string | null
+          type: string | null
+          status: string | null
+          tags: string[] | null
         }
         Insert: {
           id?: string
@@ -139,6 +150,14 @@ export interface Database {
           author_id?: string | null
           notes?: string | null
           created_at?: string
+          file_path?: string | null
+          file_name?: string | null
+          title?: string | null
+          description?: string | null
+          content?: string | null
+          type?: string | null
+          status?: string | null
+          tags?: string[] | null
         }
         Update: {
           id?: string
@@ -147,6 +166,14 @@ export interface Database {
           author_id?: string | null
           notes?: string | null
           created_at?: string
+          file_path?: string | null
+          file_name?: string | null
+          title?: string | null
+          description?: string | null
+          content?: string | null
+          type?: string | null
+          status?: string | null
+          tags?: string[] | null
         }
       }
       approvals: {
@@ -290,8 +317,8 @@ export interface DocumentWithApprovals extends DocumentWithOwner {
 export interface UserWithRole {
   id: string
   email: string
+  username: string
   name: string
-  password_hash: string
   role_id: string | null
   department: string
   status: UserStatus

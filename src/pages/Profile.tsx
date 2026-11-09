@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { updateUser, getUserById } from '../services/users'
+import { updateUser, getOwnProfile } from '../services/users'
 import { getActivityLogs } from '../services/activityLogs'
 import {
   User,
@@ -42,7 +42,7 @@ export function Profile() {
       try {
         const [logs, dbUser] = await Promise.all([
           getActivityLogs(500),
-          getUserById(user!.id),
+          getOwnProfile(user!.id),
         ])
 
         // Set real department from DB
@@ -248,6 +248,17 @@ export function Profile() {
                   <p className="text-sm text-slate-900">{department}</p>
                   </div>
                 )}
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Username
+                </label>
+                <div className="flex items-center gap-2">
+                  <User className="w-4 h-4 text-slate-400" />
+                  <p className="text-sm text-slate-900">{user?.username ? `@${user.username}` : 'N/A'}</p>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">Used to sign in. Ask an administrator to change it</p>
               </div>
 
               <div>

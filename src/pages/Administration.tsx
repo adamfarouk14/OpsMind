@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react'
-import { getUsers, getRoles, updateUser } from '../services/users'
-import { signUp } from '../services/auth'
+import { getUsers, getRoles, updateUser, deleteUserAccount, isUsernameAvailable } from '../services/users'
+import { createManagedUser } from '../services/auth'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
+import { normalizeUsername, validateUsername } from '../lib/usernames'
+import { PERMISSIONS } from '../lib/permissions'
+import type { UserRole, UserStatus } from '../types/database'
 import {
   Users,
   Shield,
@@ -27,8 +30,10 @@ import {
 const ROLE_STYLES: Record<string, string> = {
   Admin: 'bg-purple-100 text-purple-700',
   Manager: 'bg-blue-100 text-blue-700',
-  Employee: 'bg-teal-100 text-teal-700',
+  'Support Agent': 'bg-teal-100 text-teal-700',
 }
+
+const ROLES: UserRole[] = ['Admin', 'Manager', 'Support Agent']
 
 const STATUS_STYLES: Record<string, string> = {
   Active: 'bg-green-100 text-green-700',
@@ -38,17 +43,17 @@ const STATUS_STYLES: Record<string, string> = {
 export function Administration() {
   const [activeTab, setActiveTab] = useState<'users' | 'roles' | 'settings'>('users')
   const [search, setSearch] = useState('')
-  const [roleFilter, setRoleFilter] = useState<'All' | 'Admin' | 'Manager' | 'Employee'>('All')
+  const [roleFilter, setRoleFilter] = useState<'All' | UserRole>('All')
   const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Inactive'>('All')
   const [users, setUsers] = useState<any[]>([])
   const [roles, setRoles] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const { user: currentUser } = useAuth()
+  const { user: currentUser, can } = useAuth()
 
   // Add User modal
   const [showAddUserModal, setShowAddUserModal] = useState(false)
-  const [newUserForm, setNewUserForm] = useState({ name: '', email: '', password: '', role: 'Employee', department: 'Technical Support' })
+  const [newUserForm, setNewUserForm] = useState({ name: '', email: '', username: '', password: '', role: 'Support Agent' as UserRole, department: 'Technical Support' })
   const [addingUser, setAddingUser] = useState(false)
   const [addUserError, setAddUserError] = useState<string | null>(null)
 
@@ -93,8 +98,14 @@ export function Administration() {
   }, [])
 
   const handleAddUser = async () => {
-    if (!newUserForm.name || !newUserForm.email || !newUserForm.password) {
-      setAddUserError('Name, email and password are required')
+    const username = normalizeUsername(newUserForm.username)
+    if (!newUserForm.name || !newUserForm.email || !newUserForm.password || !username) {
+      setAddUserError('Name, username, email and password are required')
+      return
+    }
+    const usernameProblem = validateUsername(username)
+    if (usernameProblem) {
+      setAddUserError(usernameProblem)
       return
     }
     if (newUserForm.password.length < 8) {
@@ -104,18 +115,29 @@ export function Administration() {
     try {
       setAddingUser(true)
       setAddUserError(null)
-      await signUp(newUserForm.email, newUserForm.password, newUserForm.name, newUserForm.role as any)
+      if (!(await isUsernameAvailable(username))) {
+        setAddUserError('That username is already taken')
+        return
+      }
+      await createManagedUser({
+        email: newUserForm.email,
+        username,
+        password: newUserForm.password,
+        name: newUserForm.name,
+        role: newUserForm.role,
+        department: newUserForm.department,
+      })
       await logActivity({
         user_id: currentUser?.id,
         action: 'create',
         target_type: 'user',
         target_title: newUserForm.name,
-        details: `Created new user: ${newUserForm.email} with role ${newUserForm.role}`,
+        details: `Created new user ${username} with role ${newUserForm.role}`,
       })
       const updated = await getUsers()
       setUsers(updated)
       setShowAddUserModal(false)
-      setNewUserForm({ name: '', email: '', password: '', role: 'Employee', department: 'Technical Support' })
+      setNewUserForm({ name: '', email: '', username: '', password: '', role: 'Support Agent', department: 'Technical Support' })
     } catch (err) {
       console.error('Create user error:', err)
       const errorMsg = err instanceof Error ? err.message : String(err)
@@ -165,7 +187,13 @@ export function Administration() {
 
   const handleDeactivateUser = async () => {
     if (!deactivatingUser) return
-    
+
+    if (!can(PERMISSIONS.DEACTIVATE_USERS)) {
+      alert('Only an administrator can deactivate accounts.')
+      setDeactivatingUser(null)
+      return
+    }
+
     // Prevent deactivating yourself
     if (deactivatingUser.id === currentUser?.id) {
       alert('You cannot deactivate your own account')
@@ -173,25 +201,22 @@ export function Administration() {
       return
     }
 
-    console.log('Deactivating user:', deactivatingUser.id, deactivatingUser.name, deactivatingUser.email)
-
     try {
       setDeactivateUserLoading(true)
-      
-      // Use the existing updateUser function (same as status toggle)
+
       await updateUser(deactivatingUser.id, { status: 'Inactive' })
-      
+
       await logActivity({
         user_id: currentUser?.id,
         action: 'edit',
         target_type: 'user',
         target_id: deactivatingUser.id,
         target_title: deactivatingUser.name,
-        details: `Deactivated user: ${deactivatingUser.name} (${deactivatingUser.email})`,
+        details: `Deactivated user: ${deactivatingUser.name}`,
       })
-      
+
       // Update local state to show user as Inactive
-      setUsers(prev => prev.map(u => 
+      setUsers(prev => prev.map(u =>
         u.id === deactivatingUser.id ? { ...u, status: 'Inactive' } : u
       ))
       setDeactivatingUser(null)
@@ -227,22 +252,22 @@ export function Administration() {
   const openDeleteUserModal = async (user: any) => {
     setDeletingUser(user)
     setCanDeleteUser(false)
+    if (user.id === currentUser?.id) {
+      setCanDeleteUser(false)
+      return
+    }
     await checkCanDeleteUser(user.id)
   }
 
   const handleDeleteUser = async () => {
-    if (!deletingUser || !canDeleteUser) return
+    if (!deletingUser || !canDeleteUser || deletingUser.id === currentUser?.id) return
 
     try {
       setDeleteUserLoading(true)
-      
-      // Delete from public.users
-      const { error: deleteError } = await supabase
-        .from('users')
-        .delete()
-        .eq('id', deletingUser.id)
 
-      if (deleteError) throw deleteError
+      // The function removes the Auth account and the profile together, and
+      // refuses to remove the last active Admin.
+      await deleteUserAccount(deletingUser.id)
 
       await logActivity({
         user_id: currentUser?.id,
@@ -250,10 +275,9 @@ export function Administration() {
         target_type: 'user',
         target_id: deletingUser.id,
         target_title: deletingUser.name,
-        details: `Permanently deleted user: ${deletingUser.name} (${deletingUser.email})`,
+        details: `Permanently deleted user: ${deletingUser.name}`,
       })
 
-      // Remove from local state
       setUsers(prev => prev.filter(u => u.id !== deletingUser.id))
       setDeletingUser(null)
     } catch (err) {
@@ -265,6 +289,15 @@ export function Administration() {
   }
 
   const handleRoleChange = async (userId: string, roleName: string) => {
+    if (!can(PERMISSIONS.ASSIGN_ROLES)) {
+      alert('Only an administrator can assign roles.')
+      return
+    }
+    // The database refuses this too; the message just saves the Admin a round trip.
+    if (userId === currentUser?.id) {
+      alert('You cannot change your own role. Another administrator must do it.')
+      return
+    }
     try {
       const role = roles.find(r => r.name === roleName)
       if (!role) return
@@ -280,14 +313,18 @@ export function Administration() {
         u.id === userId ? { ...u, roles: { name: roleName, permissions: role.permissions } } : u
       ))
     } catch (err) {
-      console.error('Failed to update role:', err)
+      alert('Failed to change role: ' + (err as Error).message)
     }
   }
 
   const handleToggleStatus = async (userId: string, currentStatus: string) => {
+    if (!can(PERMISSIONS.DEACTIVATE_USERS)) {
+      alert('Only an administrator can change account status.')
+      return
+    }
     const newStatus = currentStatus === 'Active' ? 'Inactive' : 'Active'
     try {
-      await updateUser(userId, { status: newStatus as any })
+      await updateUser(userId, { status: newStatus as UserStatus })
       await logActivity({
         user_id: currentUser?.id,
         action: 'edit',
@@ -298,6 +335,7 @@ export function Administration() {
       setUsers(prev => prev.map(u => u.id === userId ? { ...u, status: newStatus } : u))
     } catch (err) {
       console.error('Failed to update status:', err)
+      alert('Failed to change account status: ' + (err as Error).message)
     }
   }
 
@@ -342,6 +380,7 @@ export function Administration() {
   const filteredUsers = users.filter(user => {
     const matchSearch =
       (user.name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (user.username || '').toLowerCase().includes(search.toLowerCase()) ||
       (user.email || '').toLowerCase().includes(search.toLowerCase())
     const matchRole = roleFilter === 'All' || user.roles?.name === roleFilter
     const matchStatus = statusFilter === 'All' || user.status === statusFilter
@@ -430,9 +469,7 @@ export function Administration() {
                       className="appearance-none px-2.5 py-1 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white pr-7"
                     >
                       <option value="All">All Roles</option>
-                      <option value="Admin">Admin</option>
-                      <option value="Manager">Manager</option>
-                      <option value="Employee">Employee</option>
+                      {ROLES.map(role => <option key={role} value={role}>{role}</option>)}
                     </select>
                     <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
                   </div>
@@ -483,6 +520,7 @@ export function Administration() {
                                 </div>
                                 <div>
                                   <p className="text-sm font-semibold text-slate-900">{user.name}</p>
+                                  <p className="text-xs text-slate-400">@{user.username}</p>
                                   <p className="text-xs text-slate-400">{user.email}</p>
                                 </div>
                               </div>
@@ -493,10 +531,10 @@ export function Administration() {
                                 onChange={e => handleRoleChange(user.id, e.target.value)}
                                 className={`text-[10px] font-semibold px-2 py-1 rounded ${ROLE_STYLES[user.roles?.name] || 'bg-slate-100 text-slate-600'} border-0 cursor-pointer`}
                               >
-                                <option value="No Role">No Role</option>
-                                <option value="Admin">Admin</option>
-                                <option value="Manager">Manager</option>
-                                <option value="Employee">Employee</option>
+                                <option value={user.roles?.name || 'No Role'} disabled>
+                                  {user.roles?.name || 'No Role'}
+                                </option>
+                                {ROLES.map(role => <option key={role} value={role}>{role}</option>)}
                               </select>
                             </td>
                             <td className="py-3.5 px-3 text-sm text-slate-600">{user.department}</td>
@@ -730,8 +768,9 @@ export function Administration() {
                 <div className="space-y-3">
                   {[
                     { label: 'Name *', key: 'name', type: 'text', placeholder: 'Full name' },
+                    { label: 'Username *', key: 'username', type: 'text', placeholder: 'lowercase, e.g. mostafa' },
                     { label: 'Email *', key: 'email', type: 'email', placeholder: 'email@example.com' },
-                    { label: 'Password *', key: 'password', type: 'password', placeholder: 'Minimum 6 characters' },
+                    { label: 'Password *', key: 'password', type: 'password', placeholder: 'Minimum 8 characters' },
                     { label: 'Department', key: 'department', type: 'text', placeholder: 'Technical Support' },
                   ].map(field => (
                     <div key={field.key}>
@@ -749,13 +788,14 @@ export function Administration() {
                     <label className="block text-xs font-semibold text-slate-700 mb-1.5">Role</label>
                     <select
                       value={newUserForm.role}
-                      onChange={e => setNewUserForm({ ...newUserForm, role: e.target.value })}
+                      onChange={e => setNewUserForm({ ...newUserForm, role: e.target.value as UserRole })}
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
-                      <option value="Employee">Employee</option>
-                      <option value="Manager">Manager</option>
-                      <option value="Admin">Admin</option>
+                      {ROLES.map(role => <option key={role} value={role}>{role}</option>)}
                     </select>
+                    <p className="text-[11px] text-slate-400 mt-1.5">
+                      Every account is created here by an Admin; the chosen role is applied immediately.
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center justify-end gap-2 mt-6">

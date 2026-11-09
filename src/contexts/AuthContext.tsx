@@ -1,12 +1,16 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
+import { signInWithUsername } from '../services/auth'
+import { isValidRole, roleHasPermission, type Permission } from '../lib/permissions'
+import type { UserRole } from '../types/database'
 
 interface User {
   id: string
   email: string
+  username: string
   name: string
-  role: string
-  permissions: string[]
+  role: UserRole
+  permissions: Permission[]
   initials: string
   avatar_color: string
 }
@@ -14,11 +18,11 @@ interface User {
 interface AuthContextType {
   user: User | null
   loading: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (username: string, password: string) => Promise<void>
   logout: () => Promise<void>
   isAuthenticated: boolean
-  hasRole: (role: string) => boolean
-  hasPermission: (permission: string) => boolean
+  hasRole: (role: UserRole) => boolean
+  can: (permission: Permission) => boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -39,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Check for existing Supabase session on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        fetchUserProfile(session.user.id)
+        fetchUserProfile(session.user.id, session.user.email ?? '').catch(err => console.error('Profile fetch failed:', err))
       } else {
         setLoading(false)
       }
@@ -48,7 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
-        fetchUserProfile(session.user.id)
+        fetchUserProfile(session.user.id, session.user.email ?? '').catch(err => console.error('Profile fetch failed:', err))
       } else {
         setUser(null)
         setLoading(false)
@@ -58,13 +62,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe()
   }, [])
 
-  const fetchUserProfile = async (userId: string) => {
+  const fetchUserProfile = async (userId: string, email: string) => {
     try {
       const { data, error } = await supabase
         .from('users')
         .select(`
           id,
-          email,
+          username,
           name,
           role_id,
           department,
@@ -87,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data) {
         // Enforce account status - block Inactive users
         if (data.status !== 'Active') {
-          console.warn('User account is inactive, signing out:', data.email)
+          console.warn('User account is inactive, signing out')
           await supabase.auth.signOut()
           setUser(null)
           setLoading(false)
@@ -96,15 +100,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // Extract role from the joined query result
         const roleData = data.roles as { name: string; permissions: string[] } | { name: string; permissions: string[] }[] | null
-        const roleName = Array.isArray(roleData) ? roleData[0]?.name : roleData?.name
-        const rolePermissions = Array.isArray(roleData) ? roleData[0]?.permissions : roleData?.permissions
+        const roleName = (Array.isArray(roleData) ? roleData[0]?.name : roleData?.name) ?? null
+        const rolePermissions = (Array.isArray(roleData) ? roleData[0]?.permissions : roleData?.permissions) ?? []
+
+        // No role, or a role outside the three supported ones, grants nothing.
+        if (!isValidRole(roleName)) {
+          await supabase.auth.signOut()
+          setUser(null)
+          setLoading(false)
+          throw new Error('This account has no valid role assigned. Please contact an administrator.')
+        }
 
         setUser({
           id: data.id,
-          email: data.email,
+          email,
+          username: data.username ?? '',
           name: data.name,
-          role: roleName || 'Employee',
-          permissions: rolePermissions || [],
+          role: roleName,
+          permissions: rolePermissions as Permission[],
           initials: data.initials || data.name.split(' ').map((n: string) => n[0]).join(''),
           avatar_color: data.avatar_color || 'bg-slate-100 text-slate-600',
         })
@@ -114,42 +127,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Failed to fetch user profile, signing out for safety:', err)
       await supabase.auth.signOut()
       setUser(null)
+      throw err
     } finally {
       setLoading(false)
     }
   }
 
-  const login = async (email: string, password: string) => {
+  const login = async (username: string, password: string) => {
     // Check if Supabase is configured
     if (!import.meta.env.VITE_SUPABASE_URL || import.meta.env.VITE_SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-      // Fall back to mock auth for development
-      if (email === 'admin@opsmind.com' && password === 'admin123') {
-        const mockUser: User = {
-          id: '1',
-          email: email,
-          name: 'System Admin',
-          role: 'Admin',
-          permissions: ['Create Documents', 'Edit Documents', 'Delete Documents', 'Approve Documents', 'Manage Users', 'Manage Roles', 'View Reports', 'Export Data'],
-          initials: 'SA',
-          avatar_color: 'bg-purple-100 text-purple-700'
-        }
-        setUser(mockUser)
-        return
-      }
-      throw new Error('Invalid credentials')
+      throw new Error('Supabase is not configured. Set VITE_SUPABASE_URL to sign in.')
     }
 
-    // Use Supabase auth
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
+    const tokens = await signInWithUsername(username, password)
 
-    if (error) {
-      throw error
-    }
+    const { error: sessionError } = await supabase.auth.setSession(tokens)
+    if (sessionError) throw sessionError
 
-    // Session change will trigger fetchUserProfile via onAuthStateChange
+    // The profile is read from the established session, never from the
+    // login response.
+    const { data: { user: signedIn } } = await supabase.auth.getUser()
+    if (!signedIn) throw new Error('Sign in did not establish a session')
+
+    await fetchUserProfile(signedIn.id, signedIn.email ?? '')
   }
 
   const logout = async () => {
@@ -164,17 +164,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
-  const hasRole = (role: string): boolean => {
-    return user?.role === role || user?.role === 'Admin'
-  }
+  const hasRole = (role: UserRole): boolean => user?.role === role
 
-  const hasPermission = (permission: string): boolean => {
-    if (!user) return false
-    // Admin with 'all' shortcut
-    if (user.role === 'Admin') return true
-    // Check against the permissions array fetched from DB
-    return user.permissions.some(p => p.toLowerCase().includes(permission.toLowerCase()))
-  }
+  const can = (permission: Permission): boolean => roleHasPermission(user?.role, permission)
 
   return (
     <AuthContext.Provider
@@ -185,7 +177,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         isAuthenticated: !!user,
         hasRole,
-        hasPermission,
+        can,
       }}
     >
       {children}

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from './components/layout/Layout'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { PERMISSIONS } from './lib/permissions'
 import { Login } from './pages/Login'
 import { Profile } from './pages/Profile'
 import { Dashboard } from './pages/Dashboard'
@@ -8,6 +9,7 @@ import { Documents } from './pages/Documents'
 import { CreateDocument } from './pages/CreateDocument'
 import { DocumentDetail } from './pages/DocumentDetail'
 import { EditDocument } from './pages/EditDocument'
+import { VersionDetail } from './pages/VersionDetail'
 import { Search } from './pages/Search'
 import { AIKnowledge } from './pages/AIKnowledge'
 import { Approvals } from './pages/Approvals'
@@ -28,20 +30,45 @@ function App() {
           <Route index element={<Dashboard />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="documents" element={<Documents />} />
-          <Route path="documents/create" element={<CreateDocument />} />
+          <Route path="documents/create" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.CREATE_DOCUMENTS}>
+              <CreateDocument />
+            </ProtectedRoute>
+          } />
           <Route path="documents/:id" element={<DocumentDetail />} />
-          <Route path="documents/:id/edit" element={<EditDocument />} />
-          <Route path="search" element={<Search />} />
-          <Route path="ai-knowledge" element={<AIKnowledge />} />
+          <Route path="documents/:id/edit" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.EDIT_OWN_DOCUMENTS}>
+              <EditDocument />
+            </ProtectedRoute>
+          } />
+          <Route path="documents/:id/versions/:versionId" element={<VersionDetail />} />
+          <Route path="search" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.SEARCH_KNOWLEDGE}>
+              <Search />
+            </ProtectedRoute>
+          } />
+          <Route path="ai-knowledge" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.USE_AI_ASSISTANT}>
+              <AIKnowledge />
+            </ProtectedRoute>
+          } />
           <Route path="approvals" element={
-            <ProtectedRoute requiredRole="Manager">
+            <ProtectedRoute requiredPermission={PERMISSIONS.REVIEW_DOCUMENTS}>
               <Approvals />
             </ProtectedRoute>
           } />
-          <Route path="reports" element={<Reports />} />
-          <Route path="activity-logs" element={<ActivityLogs />} />
+          <Route path="reports" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.VIEW_TEAM_REPORTS}>
+              <Reports />
+            </ProtectedRoute>
+          } />
+          <Route path="activity-logs" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.VIEW_AUDIT_LOGS}>
+              <ActivityLogs />
+            </ProtectedRoute>
+          } />
           <Route path="administration" element={
-            <ProtectedRoute requiredRole="Admin">
+            <ProtectedRoute requiredPermission={PERMISSIONS.MANAGE_USERS}>
               <Administration />
             </ProtectedRoute>
           } />

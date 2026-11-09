@@ -1,12 +1,15 @@
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { roleHasPermission, type Permission } from '../lib/permissions'
+import type { UserRole } from '../types/database'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
-  requiredRole?: string
+  requiredRole?: UserRole
+  requiredPermission?: Permission
 }
 
-export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, requiredRole, requiredPermission }: ProtectedRouteProps) {
   const { user, isAuthenticated, loading } = useAuth()
 
   if (loading) {
@@ -17,11 +20,14 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
     )
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !user) {
     return <Navigate to="/login" replace />
   }
 
-  if (requiredRole && user?.role !== requiredRole && user?.role !== 'Admin') {
+  const roleMatches = !requiredRole || user.role === requiredRole
+  const permissionMatches = !requiredPermission || roleHasPermission(user.role, requiredPermission)
+
+  if (!roleMatches || !permissionMatches) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">

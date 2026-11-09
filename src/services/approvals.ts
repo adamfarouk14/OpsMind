@@ -1,4 +1,6 @@
 import { supabase } from '../lib/supabase'
+import { PERMISSIONS, canReviewRecord, type Permission } from '../lib/permissions'
+import { requirePermission } from '../lib/session'
 import type { ApprovalStatus, DocumentWithOwner } from '../types/database'
 
 export interface ApprovalResult {
@@ -97,11 +99,42 @@ async function rollbackApprovalRow(snapshot: ApprovalSnapshot): Promise<void> {
   }
 }
 
+// Both decision paths run the same gate: the caller's role must allow the
+// verb, the decision must be recorded under the caller's own account, and no
+// reviewer may decide on a submission they own.
+async function assertReviewer(
+  documentId: string,
+  approverId: string,
+  permission: Permission,
+  verb: string,
+): Promise<void> {
+  const actor = await requirePermission(
+    permission,
+    `Only Managers and Administrators can ${verb} documents.`,
+  )
+
+  if (approverId !== actor.id) {
+    throw new Error(`A ${verb} decision must be recorded under your own account.`)
+  }
+
+  const { data: doc, error } = await supabase
+    .from('documents')
+    .select('id, owner_id')
+    .eq('id', documentId)
+    .single()
+  if (error) throw new Error(`Document lookup failed: ${error.message}`)
+
+  if (!canReviewRecord({ role: actor.role, id: actor.id }, { owner_id: doc.owner_id })) {
+    throw new Error('You cannot review your own submission. Another reviewer must decide.')
+  }
+}
+
 export async function approveDocument(
   documentId: string,
   approverId: string,
   remarks?: string
 ): Promise<ApprovalResult> {
+  await assertReviewer(documentId, approverId, PERMISSIONS.APPROVE_DOCUMENTS, 'approve')
   const lookup = await readApprovalRow(documentId)
 
   if (lookup.exists) {
@@ -179,6 +212,7 @@ export async function rejectDocument(
   approverId: string,
   remarks?: string
 ): Promise<ApprovalResult> {
+  await assertReviewer(documentId, approverId, PERMISSIONS.REJECT_DOCUMENTS, 'reject')
   const lookup = await readApprovalRow(documentId)
 
   if (lookup.exists) {
@@ -251,6 +285,7 @@ export async function rejectDocument(
 }
 
 export async function submitForApproval(documentId: string, _submitterId: string): Promise<ApprovalResult> {
+  await requirePermission(PERMISSIONS.SUBMIT_FOR_APPROVAL, 'Your role cannot submit documents for approval.')
   const lookup = await readApprovalRow(documentId)
 
   if (lookup.exists) {

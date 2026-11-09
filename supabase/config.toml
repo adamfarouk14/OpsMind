@@ -1,5 +1,14 @@
+# Authenticated functions: the gateway validates the caller's JWT.
 [functions.ask-groq]
-verify_jwt = false
+verify_jwt = true
 
 [functions.create-user]
+verify_jwt = true
+
+[functions.delete-user]
+verify_jwt = true
+
+# Pre-authentication function. It cannot carry a caller JWT by design and
+# enforces its own controls: rate limiting and generic failures.
+[functions.sign-in-with-username]
 verify_jwt = false

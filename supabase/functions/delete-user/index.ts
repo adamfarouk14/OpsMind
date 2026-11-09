@@ -2,145 +2,125 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Vary': 'Origin',
+  'Content-Type': 'application/json',
 }
 
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  })
+function originFor(request: Request): string | null {
+  const origin = request.headers.get('origin')
+  if (!origin) return null
+  const allowList = (Deno.env.get('ALLOWED_ORIGINS') || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (allowList.includes(origin)) return origin
+  if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return origin
+  const siteUrl = Deno.env.get('SITE_URL')
+  return siteUrl && origin === siteUrl ? origin : null
 }
 
+function headersFor(origin: string | null) {
+  return { ...corsHeaders, 'Access-Control-Allow-Origin': origin ?? 'null' }
+}
+
+function json(body: unknown, status: number, origin: string | null) {
+  return new Response(JSON.stringify(body), { status, headers: headersFor(origin) })
+}
+
+// Hard deletion of an account. Prefer deactivation: this removes the Auth
+// account and its profile, and refuses whenever history would be broken.
 serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
-  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
+  const origin = originFor(req)
+
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { status: 200, headers: headersFor(origin) })
+  }
+  if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405, origin)
 
   const authorization = req.headers.get('Authorization')
-  if (!authorization) return json({ error: 'Unauthorized' }, 401)
+  if (!authorization) return json({ error: 'Unauthorized' }, 401, origin)
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY')
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-  
-  console.log('Environment check:', {
-    hasUrl: !!supabaseUrl,
-    hasAnonKey: !!anonKey,
-    hasServiceKey: !!serviceRoleKey,
-    serviceKeyPreview: serviceRoleKey ? serviceRoleKey.substring(0, 20) + '...' : 'MISSING'
-  })
-  
-  if (!supabaseUrl || !anonKey) {
-    console.error('Required Supabase URL or anon key missing.')
-    return json({ error: 'User deactivation service is not configured.' }, 500)
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    console.error('delete_user_config_missing')
+    return json({ error: 'User deletion service is not configured.' }, 500, origin)
   }
-
-  // Use service role key if available, otherwise use anon key (less secure but works for dev)
-  const adminKey = serviceRoleKey || anonKey
-  console.log('Using admin key:', adminKey ? 'service_role' : 'anon (fallback)')
 
   const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authorization } },
     auth: { persistSession: false, autoRefreshToken: false },
   })
-  const adminClient = createClient(supabaseUrl, adminKey, {
+  const adminClient = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
 
-  // Verify the caller is authenticated
   const { data: { user: caller }, error: callerError } = await callerClient.auth.getUser()
-  if (callerError || !caller) return json({ error: 'Unauthorized' }, 401)
+  if (callerError || !caller) return json({ error: 'You must be signed in.' }, 401, origin)
 
-  // Try to verify caller is Admin from database
-  const { data: callerProfile, error: profileError } = await adminClient
+  const { data: callerProfile, error: callerProfileError } = await adminClient
     .from('users')
-    .select('id, roles:role_id(name)')
+    .select('id, status, roles:role_id(name)')
     .eq('id', caller.id)
     .single()
 
-  // If user not found in database, check if they're using the mock admin account
-  if (profileError || !callerProfile) {
-    // Allow mock admin account for development (admin@opsmind.com)
-    if (caller.email === 'admin@opsmind.com') {
-      console.log('Mock admin account detected, allowing deactivation')
-      // Continue to deactivation logic below
-    } else {
-      console.error('Failed to fetch caller profile:', profileError)
-      return json({ error: 'Failed to verify user permissions.' }, 500)
-    }
-  } else {
-    // Real database user - verify Admin role
-    const callerRole = (callerProfile as { roles?: { name?: string } } | null)?.roles?.name
-    console.log('Caller role:', callerRole, 'Profile:', JSON.stringify(callerProfile))
-    
-    if (callerRole !== 'Admin') {
-      return json({ error: 'Only administrators can deactivate users.' }, 403)
-    }
+  const callerRole = (callerProfile as { roles?: { name?: string } } | null)?.roles?.name
+  if (callerProfileError || callerProfile?.status !== 'Active' || callerRole !== 'Admin') {
+    return json({ error: 'Only administrators can delete users.' }, 403, origin)
   }
 
   let body: Record<string, unknown>
   try {
     body = await req.json()
   } catch {
-    return json({ error: 'Invalid request body.' }, 400)
+    return json({ error: 'Invalid request body.' }, 400, origin)
   }
 
-  const userId = typeof body.userId === 'string' ? body.userId.trim() : ''
-  if (!userId) {
-    return json({ error: 'userId is required.' }, 400)
+  const userId = typeof body.userId === 'string' ? body.userId : ''
+  if (!userId || userId === caller.id) {
+    return json({ error: 'You cannot delete your own account.' }, 400, origin)
   }
 
-  // Prevent self-deactivation
-  if (userId === caller.id) {
-    return json({ error: 'Cannot deactivate your own account.' }, 400)
-  }
-
-  // Verify target user exists and get current status
-  console.log('Looking for user with ID:', userId)
-  
-  const { data: targetUser, error: targetError } = await adminClient
+  const { data: target, error: targetError } = await adminClient
     .from('users')
-    .select('*')
+    .select('id, status, roles:role_id(name)')
     .eq('id', userId)
     .maybeSingle()
 
-  console.log('Query result:', { targetUser, targetError })
+  if (targetError) return json({ error: 'Could not read the account.' }, 500, origin)
+  if (!target) return json({ error: 'Account not found.' }, 404, origin)
 
-  if (targetError) {
-    console.error('Error fetching target user:', targetError)
-    return json({ error: `Database error: ${targetError.message}` }, 500)
+  const { count: docCount } = await adminClient.from('documents').select('id', { count: 'exact', head: true }).eq('owner_id', userId)
+  const { count: versionCount } = await adminClient.from('document_versions').select('id', { count: 'exact', head: true }).eq('author_id', userId)
+  const { count: approvalCount } = await adminClient.from('approvals').select('id', { count: 'exact', head: true }).eq('approver_id', userId)
+  const { count: logCount } = await adminClient.from('activity_logs').select('id', { count: 'exact', head: true }).eq('user_id', userId)
+  const { count: notificationCount } = await adminClient.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', userId)
+
+  if ((docCount ?? 0) + (versionCount ?? 0) + (approvalCount ?? 0) + (logCount ?? 0) + (notificationCount ?? 0) > 0) {
+    return json({
+      error: 'This account has related history (documents, versions, approvals, notifications or activity logs). Deactivate it instead of deleting it.',
+    }, 409, origin)
   }
 
-  if (!targetUser) {
-    console.error('Target user not found. userId:', userId)
-    // List all users to debug
-    const { data: allUsers } = await adminClient.from('users').select('id, email')
-    console.log('All users in DB:', allUsers)
-    return json({ error: 'User not found in database.' }, 404)
+  const { error: deleteProfileError } = await adminClient.from('users').delete().eq('id', userId)
+  if (deleteProfileError) {
+    // The database trigger uses this message when an Admin would be removed.
+    if (deleteProfileError.message?.includes('last active Admin')) {
+      return json({ error: 'OpsMind must keep at least one active Admin account.' }, 409, origin)
+    }
+    console.error('delete_user_profile_failed', deleteProfileError.code ?? 'unknown')
+    return json({ error: 'The account could not be removed.' }, 500, origin)
   }
 
-  console.log('Found user:', targetUser.name, targetUser.email)
-
-  // Deactivate the user by setting status to 'Inactive'
-  // This preserves all data relationships and audit trails
-  const { error: updateError } = await adminClient
-    .from('users')
-    .update({ status: 'Inactive' })
-    .eq('id', userId)
-
-  if (updateError) {
-    console.error('Failed to deactivate user:', updateError)
-    return json({ error: 'Failed to deactivate user account.' }, 500)
+  const { error: deleteAuthError } = await adminClient.auth.admin.deleteUser(userId)
+  if (deleteAuthError) {
+    // The profile is already gone, so the login path can no longer reach this
+    // account; report honestly instead of claiming a complete deletion.
+    console.error('delete_user_auth_remnant', deleteAuthError.code ?? 'unknown')
+    return json({
+      error: 'The profile was removed, but the authentication account could not. Sign-out for this account is already blocked.',
+    }, 500, origin)
   }
 
-  // Optionally: Sign out all active sessions for this user
-  // Note: This requires admin.auth.signOut or revoking refresh tokens
-  // Supabase will naturally block new logins due to status check in AuthContext
-
-  return json({ 
-    success: true, 
-    message: `User ${targetUser.name} deactivated successfully. They will be signed out on their next request.` 
-  })
+  return json({ success: true }, 200, origin)
 })

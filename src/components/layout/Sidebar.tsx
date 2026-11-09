@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import type { LucideIcon } from 'lucide-react'
 import logo from '../../assets/opsmind_mainlogo.png'
 import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../contexts/AuthContext'
+import { PERMISSIONS, type Permission } from '../../lib/permissions'
 import {
   LayoutDashboard,
   FileText,
@@ -26,6 +29,14 @@ interface SidebarProps {
   onClose: () => void
 }
 
+type NavItem = {
+  name: string
+  href: string
+  icon: LucideIcon
+  badge: string | null
+  permission?: Permission
+}
+
 export function Sidebar({ isOpen, onClose }: SidebarProps) {
   const location = useLocation()
   const [counts, setCounts] = useState<SidebarCounts>({ documents: 0, approvals: 0 })
@@ -48,16 +59,18 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     loadCounts()
   }, [])
 
-  const navigationItems = [
+  const { can } = useAuth()
+
+  const navigationItems: NavItem[] = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard, badge: null },
     { name: 'Documents', href: '/documents', icon: FileText, badge: counts.documents > 0 ? counts.documents.toString() : null },
     { name: 'Search', href: '/search', icon: Search, badge: null },
-    { name: 'AI Knowledge', href: '/ai-knowledge', icon: Brain, badge: 'AI' },
-    { name: 'Approvals', href: '/approvals', icon: CheckCircle, badge: counts.approvals > 0 ? counts.approvals.toString() : null },
-    { name: 'Reports', href: '/reports', icon: BarChart3, badge: null },
-    { name: 'Activity Logs', href: '/activity-logs', icon: Activity, badge: null },
-    { name: 'Administration', href: '/administration', icon: Settings, badge: null },
-  ]
+    { name: 'AI Knowledge', href: '/ai-knowledge', icon: Brain, badge: 'AI', permission: PERMISSIONS.USE_AI_ASSISTANT },
+    { name: 'Approvals', href: '/approvals', icon: CheckCircle, badge: counts.approvals > 0 ? counts.approvals.toString() : null, permission: PERMISSIONS.REVIEW_DOCUMENTS },
+    { name: 'Reports', href: '/reports', icon: BarChart3, badge: null, permission: PERMISSIONS.VIEW_TEAM_REPORTS },
+    { name: 'Activity Logs', href: '/activity-logs', icon: Activity, badge: null, permission: PERMISSIONS.VIEW_AUDIT_LOGS },
+    { name: 'Administration', href: '/administration', icon: Settings, badge: null, permission: PERMISSIONS.MANAGE_USERS },
+  ].filter(item => !item.permission || can(item.permission))
 
   return (
     <>

@@ -1,40 +1,37 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Lock, Mail, AlertCircle, Loader2 } from 'lucide-react'
+import { Lock, User, AlertCircle, Loader2 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
 export function Login() {
   const navigate = useNavigate()
   const { login } = useAuth()
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
-    
-    if (!email || !password) {
-      setError('Please enter both email and password')
+
+    if (!username || !password) {
+      setError('Please enter your username and password')
       return
     }
- 
-    
-    try { 
+
+    try {
       setLoading(true)
       setError(null)
-      
-      await login(email, password)
+
+      await login(username.trim(), password)
       navigate('/')
     } catch (err: any) {
-      console.error('Login error:', err)
-      if (err.message?.includes('Invalid login credentials')) {
-        setError('Invalid email or password')
-      } else if (err.message?.includes('Email not confirmed')) {
-        setError('Please confirm your email address')
-      } else {
-        setError(err.message || 'Login failed. Please try again.')
-      }
+      console.error('Login error:', err?.code ?? 'login_failed')
+      setError(
+        err?.code === 'rate_limited'
+          ? 'Too many sign-in attempts. Please wait a few minutes.'
+          : 'Invalid username or password',
+      )
     } finally {
       setLoading(false)
     }
@@ -57,7 +54,7 @@ export function Login() {
         {/* login card */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
           <div className="mb-6">
-            <h1 className="text-xl font-bold text-slate-900 mb-2">Hi Admin..</h1>
+            <h1 className="text-xl font-bold text-slate-900 mb-2">Welcome Back</h1>
             <p className="text-sm text-slate-500">Sign in to access the knowledge base</p>
           </div>
 
@@ -71,15 +68,16 @@ export function Login() {
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Email
+                Username
               </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
                 <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  type="text"
+                  autoComplete="username"
+                  value={username}
+                  onChange={e => setUsername(e.target.value)}
+                  placeholder="your.username"
                   className="w-full pl-10 pr-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder:text-slate-400"
                 />
               </div>
@@ -129,12 +127,8 @@ export function Login() {
 
           <div className="mt-6 pt-6 border-t border-slate-100 text-center">
             <p className="text-sm text-slate-500">
-              Don't have an account?{' '}
-              <button className="text-blue-600 hover:underline font-medium">
-                Contact your administrator
-              </button>
+              Don't have an account? Contact your administrator.
             </p>
-            
           </div>
         </div>
 

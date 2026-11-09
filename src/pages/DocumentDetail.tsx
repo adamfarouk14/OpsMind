@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById, createDocumentVersion } from '../services/documents'
+import { getDocumentById } from '../services/documents'
 import { submitForApproval } from '../services/approvals'
+import { findPendingRevision } from '../services/revisions'
 import { logActivity } from '../services/activityLogs'
+import { extractAttachments, getSignedAttachmentUrl } from '../lib/attachments'
 import type { DocStatus } from '../types/database'
 import { useAuth } from '../contexts/AuthContext'
 import {
@@ -24,8 +26,6 @@ import {
   Activity,
   Loader2,
   Plus,
-  Save,
-  X,
   Send,
 } from 'lucide-react'
 
@@ -50,10 +50,6 @@ export function DocumentDetail() {
   const [doc, setDoc] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [showVersionModal, setShowVersionModal] = useState(false)
-  const [newVersion, setNewVersion] = useState('')
-  const [versionNotes, setVersionNotes] = useState('')
-  const [creatingVersion, setCreatingVersion] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -62,10 +58,6 @@ export function DocumentDetail() {
         if (!id) return
         const documentData = await getDocumentById(id)
         setDoc(documentData)
-        // Set next version number
-        const currentVersion = documentData.version || 'v1.0'
-        const versionNum = parseInt(currentVersion.replace('v', '').split('.')[0]) + 1
-        setNewVersion(`v${versionNum}.0`)
       } catch (err) {
         setError('Failed to load document: ' + (err as Error).message)
         console.error('Error loading document:', err)
@@ -75,34 +67,6 @@ export function DocumentDetail() {
     }
     loadDocument()
   }, [id])
-
-  const handleCreateVersion = async () => {
-    if (!doc || !user) return
-
-    try {
-      setCreatingVersion(true)
-      await createDocumentVersion(doc.id, {
-        version: newVersion,
-        author_id: user.id,
-        notes: versionNotes,
-      })
-      
-      // Reload document to get updated versions
-      const documentData = await getDocumentById(doc.id)
-      setDoc(documentData)
-      setShowVersionModal(false)
-      setVersionNotes('')
-      
-      // Update next version number
-      const versionNum = parseInt(newVersion.replace('v', '').split('.')[0]) + 1
-      setNewVersion(`v${versionNum}.0`)
-    } catch (err) {
-      setError('Failed to create version: ' + (err as Error).message)
-      console.error('Error creating version:', err)
-    } finally {
-      setCreatingVersion(false)
-    }
-  }
 
   const handleSubmitForApproval = async () => {
     if (!doc || !user) return
@@ -173,6 +137,25 @@ export function DocumentDetail() {
 
   const statusKey = doc.status as DocStatus
   const StatusIcon = STATUS_ICONS[statusKey]
+  const attachments = extractAttachments(doc.content)
+
+  const pendingRevision = findPendingRevision(
+    doc.versions as Array<{ id: string; version: string; status?: string | null }> | undefined,
+    doc.version
+  )
+
+  const handleAttachmentDownload = async (path: string) => {
+    try {
+      const url = await getSignedAttachmentUrl(path)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = path.split('/').pop() || 'attachment'
+      a.click()
+    } catch (err) {
+      console.error('Failed to open attachment:', err)
+      alert('Could not open this attachment')
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -333,6 +316,23 @@ export function DocumentDetail() {
                 {doc.content}
               </pre>
             </div>
+            {attachments.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-slate-100">
+                <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Attachments</p>
+                <div className="space-y-1.5">
+                  {attachments.map(a => (
+                    <button
+                      key={a.path}
+                      onClick={() => handleAttachmentDownload(a.path)}
+                      className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      {a.fileName}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -343,17 +343,29 @@ export function DocumentDetail() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-slate-900">Version History</h2>
               <button
-                onClick={() => setShowVersionModal(true)}
-                className="flex items-center gap-1.5 px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                onClick={() => navigate(`/documents/${doc.id}/edit?newVersion=1`)}
+                disabled={!!pendingRevision}
+                title={pendingRevision ? `Revision ${pendingRevision.version} is awaiting approval` : undefined}
+                className="flex items-center gap-1.5 px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
               >
                 <Plus className="w-3 h-3" />
                 New Version
               </button>
             </div>
+            {pendingRevision && (
+              <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-xs font-semibold text-amber-900">
+                  Revision {pendingRevision.version} awaiting approval
+                </p>
+                <p className="text-[11px] text-amber-700 mt-0.5">
+                  Users still see {doc.version}. One pending revision at a time.
+                </p>
+              </div>
+            )}
             <div className="space-y-3">
               {doc.versions && doc.versions.length > 0 ? (
                 doc.versions.map((v: unknown, _index: number) => {
-                  const version = v as { id: string; version: string; created_at: string; author_id: string; notes: string; users?: { name: string; initials: string; avatar_color: string } }
+                  const version = v as { id: string; version: string; created_at: string; author_id: string; notes: string; content?: string | null; status?: string | null; users?: { name: string; initials: string; avatar_color: string } }
                   const isCurrentVersion = version.version === doc.version
                   return (
                     <div key={version.id} className={`flex items-start gap-3 pb-3 border-b border-slate-100 last:border-0 last:pb-0 ${isCurrentVersion ? 'bg-blue-50/50 -mx-2 px-2 rounded' : ''}`}>
@@ -365,11 +377,18 @@ export function DocumentDetail() {
                           <p className="text-sm font-semibold text-slate-900 flex items-center gap-2">
                             {version.version}
                             {isCurrentVersion && <span className="text-[10px] font-medium px-1.5 py-0.5 bg-blue-600 text-white rounded">Current</span>}
+                            {version.status === 'In Review' && <span className="text-[10px] font-medium px-1.5 py-0.5 bg-amber-500 text-white rounded">Awaiting approval</span>}
                           </p>
                           <p className="text-xs text-slate-400">{new Date(version.created_at).toLocaleDateString()}</p>
                         </div>
                         <p className="text-xs text-slate-600 mb-1">{version.notes || 'No notes'}</p>
                         <p className="text-xs text-slate-400">Created by {version.author_id === user?.id ? 'you' : (version.users?.name || version.author_id?.slice(0, 8) || 'unknown')}</p>
+                        <button
+                          onClick={() => navigate(`/documents/${doc.id}/versions/${version.id}`)}
+                          className="mt-1 text-xs text-blue-600 hover:underline"
+                        >
+                          Open version
+                        </button>
                       </div>
                     </div>
                   )
@@ -457,90 +476,17 @@ export function DocumentDetail() {
                 Export as Text
               </button>
               <button
-                onClick={() => setShowVersionModal(true)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white rounded-lg transition-colors"
+                onClick={() => navigate(`/documents/${doc.id}/edit?newVersion=1`)}
+                disabled={!!pendingRevision}
+                className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
-                Create New Version
+                Create Revised Version
               </button>
             </div>
           </div>
         </div>
       </div>
-
-      {/* Create Version Modal */}
-      {showVersionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowVersionModal(false)} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Create New Version</h3>
-                <p className="text-sm text-slate-500 mt-1">Create a new version of this document</p>
-              </div>
-              <button
-                onClick={() => setShowVersionModal(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Version Number
-                </label>
-                <input
-                  type="text"
-                  value={newVersion}
-                  onChange={e => setNewVersion(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Version Notes
-                </label>
-                <textarea
-                  rows={3}
-                  value={versionNotes}
-                  onChange={e => setVersionNotes(e.target.value)}
-                  placeholder="Describe the changes in this version..."
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 mt-6">
-              <button
-                onClick={() => setShowVersionModal(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleCreateVersion}
-                disabled={creatingVersion}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
-              >
-                {creatingVersion ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-3.5 h-3.5" />
-                    Create Version
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

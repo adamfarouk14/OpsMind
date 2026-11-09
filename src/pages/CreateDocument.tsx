@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { DocType } from '../types/database'
-import { createDocument } from '../services/documents'
+import { createDocument, createDocumentVersion } from '../services/documents'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
@@ -49,7 +49,7 @@ export function CreateDocument() {
       setError(null)
 
       const finalCode = form.code.trim() || generateCode(form.type)
-      let fileUrl: string | null = null
+      let filePath: string | null = null
 
       // Upload file to Supabase Storage if provided
       if (file) {
@@ -59,8 +59,7 @@ export function CreateDocument() {
           .from('documents')
           .upload(path, file, { upsert: false })
         if (uploadError) throw new Error('File upload failed: ' + uploadError.message)
-        const { data: urlData } = supabase.storage.from('documents').getPublicUrl(path)
-        fileUrl = urlData.publicUrl
+        filePath = path
       }
 
       // Build tags — include category as a tag for Operational Cases
@@ -69,17 +68,37 @@ export function CreateDocument() {
         tagsArray.unshift(`Category: ${form.category.trim()}`)
       }
 
+      const contentWithFile = filePath ? `${form.content}\n\n[Attached file: ${filePath}]` : form.content
+
       const doc = await createDocument({
         title: form.title,
         code: finalCode,
         type: form.type,
         version: 'v1.0',
         description: form.description,
-        content: fileUrl ? `${form.content}\n\n[Attached file: ${fileUrl}]` : form.content,
+        content: contentWithFile,
         tags: tagsArray,
         status: 'Draft',
         owner_id: user.id,
       })
+
+      try {
+        await createDocumentVersion(doc.id, {
+          version: 'v1.0',
+          author_id: user.id,
+          notes: 'Initial version',
+          title: form.title,
+          description: form.description,
+          content: contentWithFile,
+          type: form.type,
+          status: 'Draft',
+          tags: tagsArray,
+          file_path: filePath,
+          file_name: file?.name ?? null,
+        })
+      } catch (err) {
+        console.error('Failed to record initial version:', err)
+      }
 
       await logActivity({
         user_id: user.id,

@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { approveDocument, rejectDocument } from '../services/approvals'
+import { approveRevision, getPendingRevisions, rejectRevision, type RevisionCandidate } from '../services/revisions'
 import { getDocuments } from '../services/documents'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
+import { PERMISSIONS, canReviewRecord } from '../lib/permissions'
 import type { DocStatus } from '../types/database'
 import {
   CheckCircle,
@@ -16,6 +18,7 @@ import {
   Calendar,
   User,
   Loader2,
+  GitBranch,
 } from 'lucide-react'
 
 const STATUS_STYLES: Record<DocStatus, string> = {
@@ -34,21 +37,28 @@ const STATUS_ICONS: Record<DocStatus, React.ElementType> = {
 
 export function Approvals() {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, can } = useAuth()
   const [activeStatus, setActiveStatus] = useState<'All' | 'In Review' | 'Approved' | 'Rejected'>('In Review')
   const [selectedDoc, setSelectedDoc] = useState<string | null>(null)
   const [remarks, setRemarks] = useState('')
   const [showActionModal, setShowActionModal] = useState<'approve' | 'reject' | null>(null)
   const [documents, setDocuments] = useState<any[]>([])
+  const [revisions, setRevisions] = useState<RevisionCandidate[]>([])
+  const [selectedRevision, setSelectedRevision] = useState<RevisionCandidate | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
+
+  const canReview = (record: { owner_id?: string | null; author_id?: string | null }) =>
+    can(PERMISSIONS.REVIEW_DOCUMENTS) && canReviewRecord({ role: user?.role, id: user?.id }, record)
 
   useEffect(() => {
     async function loadDocuments() {
       try {
         const data = await getDocuments()
         setDocuments(data)
+        const pendingRevisions = await getPendingRevisions()
+        setRevisions(pendingRevisions)
       } catch (err) {
         setError('Failed to load documents: ' + (err as Error).message)
         console.error('Error loading documents:', err)
@@ -58,6 +68,12 @@ export function Approvals() {
     }
     loadDocuments()
   }, [])
+
+  const refresh = async () => {
+    const [updatedDocs, updatedRevisions] = await Promise.all([getDocuments(), getPendingRevisions()])
+    setDocuments(updatedDocs)
+    setRevisions(updatedRevisions)
+  }
 
   const pendingDocs = documents.filter(doc => doc.status === 'In Review')
   const approvedDocs = documents.filter(doc => doc.status === 'Approved')
@@ -85,8 +101,7 @@ export function Approvals() {
         target_code: doc?.code,
         details: remarks ? `Approved with remarks: ${remarks}` : 'Approved document',
       })
-      const updatedDocs = await getDocuments()
-      setDocuments(updatedDocs)
+      await refresh()
       setShowActionModal(null)
       setRemarks('')
       setSelectedDoc(null)
@@ -115,8 +130,7 @@ export function Approvals() {
         target_code: doc?.code,
         details: remarks ? `Rejected with remarks: ${remarks}` : 'Rejected document',
       })
-      const updatedDocs = await getDocuments()
-      setDocuments(updatedDocs)
+      await refresh()
       setShowActionModal(null)
       setRemarks('')
       setSelectedDoc(null)
@@ -125,6 +139,60 @@ export function Approvals() {
     } finally {
       setActionLoading(false)
     }
+  }
+
+  const handleApproveRevision = async () => {
+    if (!selectedRevision || !user) return
+    try {
+      setActionLoading(true)
+      const result = await approveRevision(selectedRevision.id, remarks)
+      if (result.notificationWarning) console.warn('[Approvals]', result.notificationWarning)
+      await logActivity({
+        user_id: user.id,
+        action: 'approve',
+        target_type: 'document',
+        target_id: selectedRevision.document_id,
+        target_title: selectedRevision.document?.title ?? undefined,
+        target_code: selectedRevision.document?.code,
+        details: `Published revision ${selectedRevision.version}${remarks ? `: ${remarks}` : ''}`,
+      })
+      await refresh()
+      closeRevisionModal()
+    } catch (err) {
+      setError('Failed to approve revision: ' + (err as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleRejectRevision = async () => {
+    if (!selectedRevision || !user) return
+    try {
+      setActionLoading(true)
+      const result = await rejectRevision(selectedRevision.id, remarks)
+      if (result.notificationWarning) console.warn('[Approvals]', result.notificationWarning)
+      await logActivity({
+        user_id: user.id,
+        action: 'reject',
+        target_type: 'document',
+        target_id: selectedRevision.document_id,
+        target_title: selectedRevision.document?.title ?? undefined,
+        target_code: selectedRevision.document?.code,
+        details: `Rejected revision ${selectedRevision.version}${remarks ? `: ${remarks}` : ''}`,
+      })
+      await refresh()
+      closeRevisionModal()
+    } catch (err) {
+      setError('Failed to reject revision: ' + (err as Error).message)
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const closeRevisionModal = () => {
+    setShowActionModal(null)
+    setSelectedRevision(null)
+    setRemarks('')
   }
 
   return (
@@ -155,10 +223,98 @@ export function Approvals() {
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
                 <Clock className="w-4 h-4 text-amber-600" />
-                <span className="text-sm font-semibold text-amber-700">{pendingDocs.length} Pending</span>
+                <span className="text-sm font-semibold text-amber-700">{pendingDocs.length + revisions.length} Pending</span>
               </div>
             </div>
           </div>
+
+          {/* revisions awaiting approval */}
+          {revisions.length > 0 && (
+            <div className="bg-white rounded-xl border border-amber-200 p-5">
+              <div className="flex items-center gap-2 mb-1">
+                <GitBranch className="w-4 h-4 text-amber-600" />
+                <h2 className="text-sm font-semibold text-slate-900">Revisions awaiting approval</h2>
+                <span className="text-xs font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                  {revisions.length}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mb-4">
+                New versions stay private until published. Support Agents keep seeing the current approved version.
+              </p>
+
+              <div className="space-y-3">
+                {revisions.map(rev => (
+                  <div key={rev.id} className="border border-slate-200 rounded-lg p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="text-sm font-semibold text-slate-900">
+                            {rev.document?.title ?? 'Document'} · {rev.version}
+                          </h3>
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">
+                            Revision
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mb-1">
+                          {rev.document?.code} · live version {rev.document?.version} · proposed title “{rev.title ?? '—'}”
+                        </p>
+                        <p className="text-xs text-slate-600 line-clamp-2">{rev.notes || 'No version notes'}</p>
+                        <div className="flex items-center gap-4 mt-2">
+                          <div className="flex items-center gap-1.5">
+                            <User className="w-3.5 h-3.5 text-slate-400" />
+                            <span className="text-xs text-slate-500">{rev.users?.name || 'Unknown'}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                            <span className="text-xs text-slate-500">{new Date(rev.created_at).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {canReview({ owner_id: rev.document?.owner_id, author_id: rev.author_id }) ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                setSelectedRevision(rev)
+                                setShowActionModal('approve')
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors"
+                            >
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => {
+                                setSelectedRevision(rev)
+                                setShowActionModal('reject')
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition-colors"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Reject
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-xs text-slate-400">
+                            {rev.author_id === user?.id || rev.document?.owner_id === user?.id
+                              ? 'Your own submission'
+                              : 'Another reviewer must decide'}
+                          </span>
+                        )}
+                        <button
+                          onClick={() => navigate(`/documents/${rev.document_id}/versions/${rev.id}`)}
+                          className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* status filter tabs */}
           <div className="flex items-center gap-1.5">
@@ -239,26 +395,34 @@ export function Approvals() {
                       {/* actions */}
                       {doc.status === 'In Review' && (
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              setSelectedDoc(doc.id)
-                              setShowActionModal('approve')
-                            }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors"
-                          >
-                            <CheckCircle className="w-3.5 h-3.5" />
-                            Approve
-                          </button>
-                          <button
-                            onClick={() => {
-                              setSelectedDoc(doc.id)
-                              setShowActionModal('reject')
-                            }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition-colors"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            Reject
-                          </button>
+                          {canReview({ owner_id: doc.owner_id }) ? (
+                            <>
+                              <button
+                                onClick={() => {
+                                  setSelectedDoc(doc.id)
+                                  setShowActionModal('approve')
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" />
+                                Approve
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setSelectedDoc(doc.id)
+                                  setShowActionModal('reject')
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition-colors"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                Reject
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-xs text-slate-400">
+                              {doc.owner_id === user?.id ? 'Your own submission' : 'Another reviewer must decide'}
+                            </span>
+                          )}
                           <button onClick={() => navigate(`/documents/${doc.id}`)} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
                             <Eye className="w-4 h-4" />
                           </button>
@@ -313,9 +477,9 @@ export function Approvals() {
           </div>
 
           {/* action modal */}
-          {showActionModal && selectedDoc && (
+          {(showActionModal && (selectedDoc || selectedRevision)) && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowActionModal(null)} />
+              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => { setShowActionModal(null); setSelectedRevision(null) }} />
               <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
                 <div className="flex items-start gap-3 mb-4">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
@@ -329,12 +493,18 @@ export function Approvals() {
                   </div>
                   <div>
                     <h3 className="text-base font-bold text-slate-900">
-                      {showActionModal === 'approve' ? 'Approve Document' : 'Reject Document'}
+                      {selectedRevision
+                        ? (showActionModal === 'approve' ? 'Publish Revision' : 'Reject Revision')
+                        : (showActionModal === 'approve' ? 'Approve Document' : 'Reject Document')}
                     </h3>
                     <p className="text-sm text-slate-500 mt-1">
-                      {showActionModal === 'approve'
-                        ? 'This document will be marked as approved and available for use.'
-                        : 'This document will be rejected and returned to the author for revisions.'}
+                      {selectedRevision
+                        ? (showActionModal === 'approve'
+                            ? `Version ${selectedRevision.version} will replace the live document content and become visible to users.`
+                            : `Version ${selectedRevision.version} will be discarded from publishing. The live document stays unchanged.`)
+                        : (showActionModal === 'approve'
+                            ? 'This document will be marked as approved and available for use.'
+                            : 'This document will be rejected and returned to the author for revisions.')}
                     </p>
                   </div>
                 </div>
@@ -354,13 +524,17 @@ export function Approvals() {
 
                 <div className="flex items-center justify-end gap-2">
                   <button
-                    onClick={() => setShowActionModal(null)}
+                    onClick={() => { setShowActionModal(null); setSelectedRevision(null) }}
                     className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
                   >
                     Cancel
                   </button>
                   <button
-                    onClick={showActionModal === 'approve' ? handleApprove : handleReject}
+                    onClick={
+                      selectedRevision
+                        ? (showActionModal === 'approve' ? handleApproveRevision : handleRejectRevision)
+                        : (showActionModal === 'approve' ? handleApprove : handleReject)
+                    }
                     disabled={actionLoading}
                     className={`px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                       showActionModal === 'approve'
