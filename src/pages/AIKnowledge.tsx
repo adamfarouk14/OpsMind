@@ -98,21 +98,32 @@ async function askGroq(question: string, contextDocs: any[]): Promise<string> {
     console.error('[askGroq] Edge Function error:', error)
     
     // Extract actual HTTP response details from FunctionsHttpError
-    if (error.context) {
+    if (error.context && error.context instanceof Response) {
       const status = error.context.status
       const statusText = error.context.statusText
       console.error('[askGroq] HTTP Response:', { status, statusText })
       
-      // Try to read response body
-      error.context.json().then((body: any) => {
-        console.error('[askGroq] Response body:', body)
-      }).catch(() => {
-        error.context.text().then((text: string) => {
-          console.error('[askGroq] Response text:', text)
-        }).catch(() => {
-          console.error('[askGroq] Could not read response body')
-        })
-      })
+      // Safely read response body
+      try {
+        const responseClone = error.context.clone()
+        const bodyText = await responseClone.text()
+        console.error('[askGroq] Response body (text):', bodyText)
+        
+        // Try to parse as JSON
+        try {
+          const bodyJson = JSON.parse(bodyText)
+          console.error('[askGroq] Response body (parsed):', bodyJson)
+          if (bodyJson.error) {
+            console.error('[askGroq] Error field:', bodyJson.error)
+          }
+        } catch {
+          // Not JSON, already logged as text
+        }
+      } catch (readError) {
+        console.error('[askGroq] Failed to read response body:', readError)
+      }
+    } else {
+      console.error('[askGroq] No valid response context available')
     }
     
     console.error('[askGroq] Error context:', { 
