@@ -11,6 +11,7 @@ import {
   Brain,
   CheckCircle,
   FileText,
+  HardDrive,
   LayoutDashboard,
   PanelLeftClose,
   PanelLeftOpen,
@@ -76,6 +77,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     ],
     [
       { name: 'Documents', href: '/documents', icon: FileText, badge: counts.documents > 0 ? counts.documents.toString() : null },
+      { name: 'Devices', href: '/devices', icon: HardDrive, badge: null, permission: PERMISSIONS.VIEW_DEVICES },
       { name: 'AI Knowledge', href: '/ai-knowledge', icon: Brain, badge: 'AI', permission: PERMISSIONS.USE_AI_ASSISTANT },
       { name: 'Approvals', href: '/approvals', icon: CheckCircle, badge: counts.approvals > 0 ? counts.approvals.toString() : null, permission: PERMISSIONS.REVIEW_DOCUMENTS },
     ],

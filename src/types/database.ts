@@ -5,6 +5,25 @@ export type DocStatus = 'Draft' | 'In Review' | 'Approved' | 'Rejected'
 export type ApprovalStatus = 'Not Started' | 'Pending' | 'Approved' | 'Rejected'
 export type UserRole = 'Admin' | 'Manager' | 'Support Agent'
 export type UserStatus = 'Active' | 'Inactive'
+export type DeviceCategory =
+  | 'POS' | 'Interactive Display' | 'Printer' | 'Laptop' | 'Computer'
+  | 'Monitor' | 'Barcode Scanner' | 'Mobile' | 'Server' | 'Network' | 'Other'
+export type DeviceStatus = 'Active' | 'Archived'
+export type AttachmentStatus = 'pending' | 'available'
+
+// One stored file tied to one document or one version of it. `version_id: null`
+// means the live document row, not "every version".
+export interface DocumentAttachment {
+  id: string
+  document_id: string
+  version_id: string | null
+  storage_bucket: string
+  storage_path: string
+  uploaded_by: string
+  file_name: string | null
+  status: AttachmentStatus
+  created_at: string
+}
 
 export interface Database {
   public: {
@@ -281,6 +300,86 @@ export interface Database {
           created_at?: string
         }
       }
+      devices: {
+        Row: {
+          id: string
+          name: string
+          manufacturer: string
+          model_number: string
+          category: DeviceCategory
+          description: string | null
+          specifications: string | null
+          status: DeviceStatus
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          manufacturer: string
+          model_number: string
+          category?: DeviceCategory
+          description?: string | null
+          specifications?: string | null
+          status?: DeviceStatus
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          manufacturer?: string
+          model_number?: string
+          category?: DeviceCategory
+          description?: string | null
+          specifications?: string | null
+          status?: DeviceStatus
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      document_devices: {
+        Row: {
+          document_id: string
+          device_id: string
+          created_at: string
+        }
+        Insert: {
+          document_id: string
+          device_id: string
+          created_at?: string
+        }
+        Update: {
+          document_id?: string
+          device_id?: string
+          created_at?: string
+        }
+      }
+      document_attachments: {
+        Row: {
+          id: string
+          document_id: string
+          version_id: string | null
+          storage_bucket: string
+          storage_path: string
+          uploaded_by: string
+          file_name: string | null
+          status: AttachmentStatus
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          document_id: string
+          version_id?: string | null
+          storage_bucket?: string
+          storage_path: string
+          uploaded_by: string
+          file_name?: string | null
+          status?: AttachmentStatus
+          created_at?: string
+        }
+        Update: never
+      }
     }
   }
 }
@@ -331,4 +430,25 @@ export interface UserWithRole {
     name: UserRole
     permissions: string[]
   }
+}
+
+export interface Device {
+  id: string
+  name: string
+  manufacturer: string
+  model_number: string
+  category: DeviceCategory
+  description: string | null
+  specifications: string | null
+  status: DeviceStatus
+  created_at: string
+  updated_at: string
+}
+
+export interface DeviceWithDocuments extends Device {
+  documents: DocumentWithOwner[]
+}
+
+export interface DocumentWithDevices extends DocumentWithOwner {
+  devices: Device[]
 }

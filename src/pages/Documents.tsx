@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { DocType, DocStatus } from '../types/database'
+import type { Device, DocType, DocStatus } from '../types/database'
 import { getDocuments, deleteDocument } from '../services/documents'
+import { getDocumentDeviceMap, isDevicesSchemaMissing } from '../services/devices'
 import { submitForApproval } from '../services/approvals'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
+import { DEVICES_UNAVAILABLE_MESSAGE } from '../lib/devices'
+import { PERMISSIONS } from '../lib/permissions'
 import {
   Plus,
   Search,
@@ -27,6 +30,7 @@ import {
   ArrowUpDown,
   Loader2,
   Send,
+  HardDrive,
 } from 'lucide-react'
 
 // config
@@ -64,9 +68,11 @@ const TYPE_STYLES: Record<DocType, string> = {
 // row actions menu
 function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => void; onDeleted: (id: string) => void }) {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, can } = useAuth()
   const [deleting, setDeleting] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // Physically deleting a document also removes its files, which only an Admin may do.
+  const canDelete = can(PERMISSIONS.HARD_DELETE_DOCUMENTS)
 
   const handleDownload = () => {
     if (!doc) return
@@ -116,7 +122,7 @@ function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => voi
     if (!window.confirm(`Delete "${doc.title}"? This cannot be undone.`)) return
     try {
       setDeleting(true)
-      const { remainingFiles } = await deleteDocument(doc.id)
+      const { remainingFiles, keptFiles } = await deleteDocument(doc.id)
       await logActivity({
         user_id: user?.id,
         action: 'delete',
@@ -127,6 +133,9 @@ function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => voi
         details: `Deleted ${doc.type}: ${doc.title}`,
       })
       onDeleted(doc.id)
+      if (keptFiles.length > 0) {
+        alert(`Document deleted. ${keptFiles.length} stored file(s) were kept:\n${keptFiles.map(f => `${f.path} (${f.reason})`).join('\n')}`)
+      }
       if (remainingFiles.length > 0) {
         alert(`Document deleted, but ${remainingFiles.length} stored file(s) could not be removed from storage.`)
       }
@@ -172,14 +181,16 @@ function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => voi
         <Download className="w-3.5 h-3.5" />
         Download
       </button>
-      <button
-        onClick={handleDelete}
-        disabled={deleting}
-        className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12px] font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40"
-      >
-        <Trash2 className="w-3.5 h-3.5" />
-        {deleting ? 'Deleting...' : 'Delete'}
-      </button>
+      {canDelete && (
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-[12px] font-medium text-red-600 hover:bg-red-50 transition-colors disabled:opacity-40"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          {deleting ? 'Deleting...' : 'Delete'}
+        </button>
+      )}
     </div>
   )
 }
@@ -187,13 +198,18 @@ function ActionsMenu({ doc, onClose, onDeleted }: { doc: any; onClose: () => voi
 // main page
 export function Documents() {
   const navigate = useNavigate()
+  const { can } = useAuth()
   const [activeType, setActiveType] = useState<DocType | 'All'>('All')
   const [activeStatus, setActiveStatus] = useState<DocStatus | 'All'>('All')
+  const [deviceFilter, setDeviceFilter] = useState('All')
   const [search, setSearch] = useState('')
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<'title' | 'code' | 'type' | 'version' | 'owner' | 'status' | 'updatedAt'>('updatedAt')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
   const [documents, setDocuments] = useState<any[]>([])
+  const [deviceMap, setDeviceMap] = useState<Record<string, Device[]>>({})
+  const [devicesError, setDevicesError] = useState<string | null>(null)
+  const [devicesUnavailable, setDevicesUnavailable] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -212,15 +228,43 @@ export function Documents() {
     loadDocuments()
   }, [])
 
+  // The devices columns are extra, so a failed read must stay visible instead
+  // of looking like "no documents have devices".
+  const loadDeviceLinks = async () => {
+    try {
+      setDeviceMap(await getDocumentDeviceMap())
+      setDevicesError(null)
+      setDevicesUnavailable(false)
+    } catch (err) {
+      console.error('Failed to load device links:', err)
+      setDeviceMap({})
+      if (isDevicesSchemaMissing(err)) setDevicesUnavailable(true)
+      else setDevicesError('Device links could not be loaded, so the Devices column is hidden.')
+    }
+  }
+
+  useEffect(() => {
+    loadDeviceLinks()
+  }, [])
+
+  const linkedDevices = Object.values(deviceMap)
+    .flat()
+    .filter((device, index, all) => all.findIndex(d => d.id === device.id) === index)
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  const showDevices = can(PERMISSIONS.VIEW_DEVICES) && linkedDevices.length > 0
+
   // filter logic
   const filtered = documents.filter(doc => {
     const matchType = activeType === 'All' || doc.type === activeType
     const matchStatus = activeStatus === 'All' || doc.status === activeStatus
+    const matchDevice =
+      deviceFilter === 'All' || (deviceMap[doc.id] || []).some(device => device.id === deviceFilter)
     const matchSearch =
       doc.title.toLowerCase().includes(search.toLowerCase()) ||
       doc.code.toLowerCase().includes(search.toLowerCase()) ||
       (doc.users?.name || '').toLowerCase().includes(search.toLowerCase())
-    return matchType && matchStatus && matchSearch
+    return matchType && matchStatus && matchDevice && matchSearch
   })
 
   // sort logic
@@ -295,6 +339,28 @@ export function Documents() {
             </button>
           </div>
 
+          {/* device link read state */}
+          {devicesError && (
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
+              <p className="text-sm text-red-700">{devicesError}</p>
+              <button
+                onClick={loadDeviceLinks}
+                className="px-3 py-1.5 text-xs font-medium text-red-700 border border-red-200 hover:bg-red-100 rounded-lg transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {devicesUnavailable && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <p className="text-[13px] font-semibold text-amber-900">{DEVICES_UNAVAILABLE_MESSAGE}</p>
+              <p className="text-[12px] text-amber-700 mt-1">
+                Documents and every other part of the workspace keep working normally until the setup is finished.
+              </p>
+            </div>
+          )}
+
           {/* type filter tabs */}
           <div className="flex items-center gap-1.5 flex-wrap">
             {DOC_TYPES.map(({ label, value, icon: Icon, color }) => (
@@ -336,6 +402,26 @@ export function Documents() {
 
           {/* divider */}
           <div className="w-px h-5 bg-slate-200 hidden sm:block" />
+
+          {/* device filter */}
+          {showDevices && (
+            <div className="flex items-center gap-1.5">
+              <HardDrive className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-[12px] text-slate-500 font-medium">Device:</span>
+              <select
+                value={deviceFilter}
+                onChange={e => setDeviceFilter(e.target.value)}
+                className="px-2 py-1 text-[11px] font-semibold bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-600"
+              >
+                <option value="All">All</option>
+                {linkedDevices.map(device => (
+                  <option key={device.id} value={device.id}>
+                    {device.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* status filter */}
           <div className="flex items-center gap-1.5">
@@ -399,6 +485,11 @@ export function Documents() {
                       {sortBy !== 'version' && <ArrowUpDown className="w-3 h-3 opacity-40" />}
                     </button>
                   </th>
+                  {showDevices && (
+                    <th className="text-left py-3 px-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wide hidden lg:table-cell">
+                      Devices
+                    </th>
+                  )}
                   <th className="text-left py-3 px-3 text-[11px] font-semibold text-slate-400 uppercase tracking-wide hidden md:table-cell">
                     <button
                       onClick={() => handleSort('owner')}
@@ -441,7 +532,7 @@ export function Documents() {
               <tbody>
                 {sorted.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-16 text-center">
+                    <td colSpan={showDevices ? 8 : 7} className="py-16 text-center">
                       <FileText className="w-10 h-10 text-slate-200 mx-auto mb-3" />
                       <p className="text-[13px] font-medium text-slate-400">No documents found</p>
                       <p className="text-[12px] text-slate-300 mt-1">Try adjusting your filters or search term</p>
@@ -475,6 +566,19 @@ export function Documents() {
 
                         {/* version */}
                         <td className="py-3.5 px-3 text-[12px] font-medium text-slate-600">{doc.version}</td>
+
+                        {showDevices && (
+                          <td className="py-3.5 px-3 hidden lg:table-cell">
+                            {(deviceMap[doc.id] || []).length === 0 ? (
+                              <span className="text-[11px] text-slate-300">—</span>
+                            ) : (
+                              <div className="flex items-center gap-1.5" title={(deviceMap[doc.id] || []).map(device => device.name).join(', ')}>
+                                <HardDrive className="w-3 h-3 text-slate-400" />
+                                <span className="text-[12px] text-slate-600">{(deviceMap[doc.id] || []).length}</span>
+                              </div>
+                            )}
+                          </td>
+                        )}
 
                         {/* owner */}
                         <td className="py-3.5 px-3 hidden md:table-cell">

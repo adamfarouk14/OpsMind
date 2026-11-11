@@ -3,20 +3,31 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import type { DocType } from '../types/database'
 import { getDocumentById, updateDocument, createDocumentVersion } from '../services/documents'
 import { findPendingRevision } from '../services/revisions'
+import { getDevicesForDocument, syncDocumentDevices, isDevicesSchemaMissing } from '../services/devices'
 import { nextVersionStamp } from '../lib/versions'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase } from '../lib/supabase'
+import { DevicePicker } from '../components/DevicePicker'
+import { DEVICES_UNAVAILABLE_MESSAGE } from '../lib/devices'
+import {
+  attachmentFileName,
+  buildAttachmentPath,
+  storeAttachment,
+  storeAttachmentForRevision,
+  validateAttachmentFile,
+} from '../services/attachments'
+import { PERMISSIONS } from '../lib/permissions'
 import { ArrowLeft, Save, X, AlertCircle, ChevronDown, GitBranch, Loader2, Upload } from 'lucide-react'
 
 export function EditDocument() {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const { user } = useAuth()
+  const { user, can } = useAuth()
   const [doc, setDoc] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const [form, setForm] = useState({
     title: '',
@@ -30,10 +41,34 @@ export function EditDocument() {
   })
 
   const [file, setFile] = useState<File | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null)
+  const [deviceIds, setDeviceIds] = useState<string[]>([])
+  const [originalDeviceIds, setOriginalDeviceIds] = useState<string[]>([])
   const [showDiscardModal, setShowDiscardModal] = useState(false)
   const [createNewVersion, setCreateNewVersion] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [linkWarning, setLinkWarning] = useState<string | null>(null)
+  const [devicesError, setDevicesError] = useState<string | null>(null)
+  const [devicesUnavailable, setDevicesUnavailable] = useState(false)
   const [pendingRevision, setPendingRevision] = useState<{ id: string; version: string } | null>(null)
+
+  // Reads the stored links so a failed read is never shown as an empty list.
+  const loadLinkedDevices = async () => {
+    if (!id) return
+    try {
+      const linked = await getDevicesForDocument(id)
+      const linkedIds = linked.map(device => device.id)
+      setDeviceIds(linkedIds)
+      setOriginalDeviceIds(linkedIds)
+      setDevicesError(null)
+      setDevicesUnavailable(false)
+    } catch (err) {
+      console.error('Failed to load linked devices:', err)
+      if (isDevicesSchemaMissing(err)) setDevicesUnavailable(true)
+      else setDevicesError('Linked devices could not be loaded: ' + (err as Error).message)
+    }
+  }
 
   useEffect(() => {
     async function loadData() {
@@ -61,6 +96,9 @@ export function EditDocument() {
           documentData.version
         )
         setPendingRevision(pending ? { id: pending.id, version: pending.version } : null)
+
+        // Links never block editing the document itself.
+        await loadLinkedDevices()
       } catch (err) {
         setError('Failed to load document: ' + (err as Error).message)
         console.error('Error loading document:', err)
@@ -121,24 +159,67 @@ export function EditDocument() {
     )
   }
 
+  // Mirrors the document_devices write policy: managers link anything, agents
+  // only their own not-yet-published drafts. RLS still decides in the database.
+  const canLink = can(PERMISSIONS.LINK_DEVICES)
+    && (can(PERMISSIONS.EDIT_SUPERVISED_DOCUMENTS)
+        || (doc.owner_id === user?.id && doc.status !== 'Approved'))
+
+  // Without a trustworthy read the selection may be wrong, so linking is off.
+  const linksReadOk = !devicesError && !devicesUnavailable
+
+  // Returns false when the links were refused, so the caller can stay on the
+  // form and offer a retry instead of re-saving the whole document.
+  const syncDevices = async (): Promise<boolean> => {
+    try {
+      await syncDocumentDevices(doc.id, deviceIds)
+      setOriginalDeviceIds(deviceIds)
+      setLinkWarning(null)
+      return true
+    } catch (err) {
+      console.error('Failed to update device links:', err)
+      setLinkWarning(`The document was saved, but its device links were not: ${(err as Error).message}`)
+      return false
+    }
+  }
+
+  const linksChanged = [...deviceIds].sort().join() !== [...originalDeviceIds].sort().join()
+
+  const retryLinkDevices = async () => {
+    if (!linksChanged) {
+      navigate(`/documents/${doc.id}`)
+      return
+    }
+    setSaving(true)
+    const linked = await syncDevices()
+    setSaving(false)
+    if (linked) navigate(`/documents/${doc.id}`)
+  }
+
   const handleSave = async () => {
     if (!doc || !user) {
-      setError('Cannot save: not authenticated')
+      setSaveError('Cannot save: not authenticated')
+      return
+    }
+
+    if (file && !can(PERMISSIONS.UPLOAD_DOCUMENTS)) {
+      setFileError('Your role cannot attach files to documents.')
       return
     }
 
     if (createNewVersion && pendingRevision) {
-      setError(`Revision ${pendingRevision.version} is already awaiting approval. It must be approved or rejected before another revision can be saved.`)
+      setSaveError(`Revision ${pendingRevision.version} is already awaiting approval. It must be approved or rejected before another revision can be saved.`)
       return
     }
     if (!createNewVersion && doc.status === 'Approved') {
-      setError('This document is already published. Tick “Create New Version” so your changes go through approval instead of replacing it silently.')
+      setSaveError('This document is already published. Tick “Create New Version” so your changes go through approval instead of replacing it silently.')
       return
     }
 
     try {
       setSaving(true)
-      setError(null)
+      setSaveError(null)
+      setAttachmentWarning(null)
 
       let tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t)
       if (form.type === 'Operational Case' && form.category.trim()) {
@@ -146,72 +227,83 @@ export function EditDocument() {
         tagsArray.unshift(`Category: ${form.category.trim()}`)
       }
 
-      let contentWithFile = form.content
-      let filePath: string | null = null
-
-      // Upload new file if provided
-      if (file) {
-        const ext = file.name.split('.').pop()
-        const path = `${user.id}/${Date.now()}_${form.code}.${ext}`
-        const { error: uploadError } = await supabase.storage
-          .from('documents')
-          .upload(path, file, { upsert: false })
-        if (uploadError) throw new Error('File upload failed: ' + uploadError.message)
-        filePath = path
-        contentWithFile = `${form.content}\n\n[Attached file: ${path}]`
-      }
-
-      if (createNewVersion) {
-        // Staged revision: the live document keeps its approved content until an
-        // admin approves this row from the Approvals page.
-        await createDocumentVersion(doc.id, {
-          version: targetVersion,
-          author_id: user.id,
-          notes: form.versionNotes,
-          title: form.title,
-          description: form.description,
-          content: contentWithFile,
-          type: form.type,
-          status: 'In Review',
-          tags: tagsArray,
-          file_path: filePath,
-          file_name: file?.name ?? null,
-        })
-
-        await logActivity({
-          user_id: user.id,
-          action: 'edit',
-          target_type: 'document',
-          target_id: doc.id,
-          target_title: form.title,
-          target_code: form.code,
-          details: `Submitted ${targetVersion} for approval: ${form.versionNotes}`,
-        })
-      } else {
+      // One save path for both modes; it returns the new version id when a
+      // revision is staged, because the attachment binds to that row.
+      const saveRecord = async (content: string, filePath: string | null) => {
+        if (createNewVersion) {
+          const version = await createDocumentVersion(doc.id, {
+            version: targetVersion,
+            author_id: user.id,
+            notes: form.versionNotes,
+            title: form.title,
+            description: form.description,
+            content,
+            type: form.type,
+            status: 'In Review',
+            tags: tagsArray,
+            file_path: filePath,
+            file_name: file && filePath ? attachmentFileName(file) : null,
+          })
+          return version?.id ?? null
+        }
         await updateDocument(doc.id, {
           title: form.title,
           code: form.code,
           type: form.type,
           version: doc.version,
           description: form.description,
-          content: contentWithFile,
+          content,
           tags: tagsArray,
         })
+        return null
+      }
 
-        await logActivity({
-          user_id: user.id,
-          action: 'edit',
-          target_type: 'document',
-          target_id: doc.id,
-          target_title: form.title,
-          target_code: form.code,
-          details: `Edited document: ${form.title}`,
-        })
+      let notice: string | null = null
+
+      if (file) {
+        const invalid = validateAttachmentFile(file)
+        if (invalid) {
+          setFileError(invalid)
+          return
+        }
+        const path = buildAttachmentPath(user.id, form.code, file.name)
+        const contentWithFile = `${form.content}\n\n[Attached file: ${path}]`
+        try {
+          notice = createNewVersion
+            ? await storeAttachmentForRevision(file, path, doc.id, () => saveRecord(contentWithFile, path))
+            : await storeAttachment(file, path, { documentId: doc.id }, () => saveRecord(contentWithFile, path))
+        } catch (err) {
+          // Nothing was published: the document keeps its previous content.
+          console.error('Failed to attach file:', err)
+          setSaveError('Failed to save document: ' + (err as Error).message)
+          return
+        }
+      } else {
+        await saveRecord(form.content, null)
+      }
+
+      await logActivity({
+        user_id: user.id,
+        action: 'edit',
+        target_type: 'document',
+        target_id: doc.id,
+        target_title: form.title,
+        target_code: form.code,
+        details: createNewVersion
+          ? `Submitted ${targetVersion} for approval: ${form.versionNotes}`
+          : `Edited document: ${form.title}`,
+      })
+
+      if (notice) setAttachmentWarning(notice)
+
+      if (canLink && linksReadOk && linksChanged) {
+        // Keep the form open on failure so only the links are retried.
+        if (!(await syncDevices())) return
       }
 
       navigate(`/documents/${doc.id}`)
     } catch (err) {
-      setError('Failed to save document: ' + (err as Error).message)
+      setSaveError('Failed to save document: ' + (err as Error).message)
       console.error('Error saving document:', err)
     } finally {
       setSaving(false)
@@ -256,9 +348,37 @@ export function EditDocument() {
       )}
 
       <div className="space-y-5">
-        {error && (
+        {saveError && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-            <p className="text-sm text-red-700">{error}</p>
+            <p className="text-sm text-red-700">{saveError}</p>
+          </div>
+        )}
+
+        {attachmentWarning && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <p className="text-sm font-semibold text-amber-900">The document was saved, but its file needs attention.</p>
+            <p className="text-xs text-amber-700 mt-1">{attachmentWarning}</p>
+          </div>
+        )}
+
+        {linkWarning && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <p className="text-sm font-semibold text-amber-900">The document was saved, but its device links were not.</p>
+            <p className="text-xs text-amber-700 mt-1">{linkWarning}</p>
+            <div className="flex items-center gap-2 mt-3">
+              <button
+                onClick={retryLinkDevices}
+                className="px-3 py-1.5 text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors"
+              >
+                Retry device linking
+              </button>
+              <button
+                onClick={() => navigate(`/documents/${doc.id}`)}
+                className="px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 rounded-lg transition-colors"
+              >
+                Continue without these links
+              </button>
+            </div>
           </div>
         )}
 
@@ -433,6 +553,7 @@ export function EditDocument() {
                 </div>
               )}
 
+              {can(PERMISSIONS.UPLOAD_DOCUMENTS) ? (
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   Replace / Add File (optional)
@@ -445,12 +566,17 @@ export function EditDocument() {
                     {file ? (
                       <p className="text-xs font-medium text-blue-700 truncate">{file.name}</p>
                     ) : (
-                      <p className="text-xs text-slate-500">Click to upload a new file</p>
+                      <p className="text-xs text-slate-500">Click to choose a new file</p>
                     )}
-                    <p className="text-[10px] text-slate-400 mt-0.5">PDF, Word, Excel, image — max 10MB</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      PDF, Word, Excel, PNG, JPEG or plain text — max 10MB
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Replacing keeps the previous version's file intact.
+                    </p>
                   </div>
                   {file && (
-                    <button type="button" onClick={e => { e.preventDefault(); setFile(null) }} className="text-slate-400 hover:text-red-500 transition-colors">
+                    <button type="button" onClick={e => { e.preventDefault(); setFile(null); setFileError(null) }} className="text-slate-400 hover:text-red-500 transition-colors">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   )}
@@ -458,11 +584,57 @@ export function EditDocument() {
                     type="file"
                     className="hidden"
                     accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt"
-                    onChange={e => setFile(e.target.files?.[0] || null)}
+                    onChange={e => {
+                      const chosen = e.target.files?.[0] || null
+                      setFile(chosen)
+                      setFileError(chosen ? validateAttachmentFile(chosen) : null)
+                    }}
                   />
                 </label>
+                {fileError && (
+                  <p className="text-xs text-red-600 mt-1.5">{fileError}</p>
+                )}
               </div>
+              ) : (
+                <p className="text-xs text-slate-400">
+                  Your role cannot attach files to documents.
+                </p>
+              )}
             </div>
+
+            {/* linked devices */}
+            {devicesError ? (
+              <div className="bg-white rounded-xl border border-red-200 p-6">
+                <h2 className="text-sm font-semibold text-slate-900 mb-1">Linked Devices</h2>
+                <p className="text-xs text-red-700">{devicesError}</p>
+                <p className="text-xs text-slate-500 mt-1">Device linking stays off until the current links can be read.</p>
+                <button
+                  onClick={loadLinkedDevices}
+                  disabled={saving}
+                  className="mt-3 px-3 py-1.5 text-xs font-medium text-red-700 border border-red-200 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-40"
+                >
+                  Retry loading devices
+                </button>
+              </div>
+            ) : devicesUnavailable ? (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-6">
+                <h2 className="text-sm font-semibold text-amber-900 mb-1">Linked Devices</h2>
+                <p className="text-xs text-amber-700">{DEVICES_UNAVAILABLE_MESSAGE}</p>
+              </div>
+            ) : canLink ? (
+              <div className="bg-white rounded-xl border border-slate-200 p-6">
+                <h2 className="text-sm font-semibold text-slate-900 mb-1">Linked Devices</h2>
+                <p className="text-xs text-slate-500 mb-4">Shared metadata — these links are saved immediately, not part of a revision</p>
+                <DevicePicker selectedIds={deviceIds} onChange={setDeviceIds} disabled={saving} />
+              </div>
+            ) : (
+              can(PERMISSIONS.VIEW_DEVICES) && deviceIds.length > 0 && (
+                <div className="bg-white rounded-xl border border-slate-200 p-6">
+                  <h2 className="text-sm font-semibold text-slate-900 mb-1">Linked Devices</h2>
+                  <p className="text-xs text-slate-500">These links are read-only: a published document or someone else's document can only be relinked by its owner or a manager.</p>
+                </div>
+              )
+            )}
 
             {/* content */}
             <div className="bg-white rounded-xl border border-slate-200 p-6">

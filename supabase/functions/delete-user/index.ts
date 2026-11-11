@@ -96,9 +96,36 @@ serve(async (req) => {
   const { count: logCount } = await adminClient.from('activity_logs').select('id', { count: 'exact', head: true }).eq('user_id', userId)
   const { count: notificationCount } = await adminClient.from('notifications').select('id', { count: 'exact', head: true }).eq('user_id', userId)
 
-  if ((docCount ?? 0) + (versionCount ?? 0) + (approvalCount ?? 0) + (logCount ?? 0) + (notificationCount ?? 0) > 0) {
+  const { count: attachmentCount, error: attachmentError } = await adminClient
+    .from('document_attachments')
+    .select('id', { count: 'exact', head: true })
+    .eq('uploaded_by', userId)
+
+  const { count: cleanupCount, error: cleanupError } = await adminClient
+    .from('attachment_cleanup_requests')
+    .select('id', { count: 'exact', head: true })
+    .eq('requested_by', userId)
+
+  // Before the registry migration these tables do not exist, so they block nothing.
+  if ((attachmentError && attachmentError.code !== '42P01') || (cleanupError && cleanupError.code !== '42P01')) {
+    console.error('delete_user_attachment_check_failed', attachmentError?.code ?? cleanupError?.code ?? 'unknown')
+    return json({ error: 'The attachment records of this account could not be checked.' }, 500, origin)
+  }
+
+  const related: string[] = []
+  if ((docCount ?? 0) > 0) related.push(`${docCount} document(s) they own`)
+  if ((versionCount ?? 0) > 0) related.push(`${versionCount} document version(s) they authored`)
+  if ((approvalCount ?? 0) > 0) related.push(`${approvalCount} approval(s) they recorded`)
+  if ((logCount ?? 0) > 0) related.push(`${logCount} activity log(s) naming them`)
+  if ((notificationCount ?? 0) > 0) related.push(`${notificationCount} notification(s) addressed to them`)
+  if ((attachmentCount ?? 0) > 0) {
+    related.push(`${attachmentCount} attachment record(s) crediting them as the uploader - their files would stay in Storage`)
+  }
+  if ((cleanupCount ?? 0) > 0) related.push(`${cleanupCount} file cleanup request(s) they opened`)
+
+  if (related.length > 0) {
     return json({
-      error: 'This account has related history (documents, versions, approvals, notifications or activity logs). Deactivate it instead of deleting it.',
+      error: `This account is still referenced: ${related.join(', ')}. Deactivate it instead of deleting it.`,
     }, 409, origin)
   }
 
@@ -107,6 +134,10 @@ serve(async (req) => {
     // The database trigger uses this message when an Admin would be removed.
     if (deleteProfileError.message?.includes('last active Admin')) {
       return json({ error: 'OpsMind must keep at least one active Admin account.' }, 409, origin)
+    }
+    // A reference created between the check and the delete still stops it here.
+    if (deleteProfileError.code === '23503') {
+      return json({ error: 'This account is still referenced by records that must be kept. Deactivate it instead of deleting it.' }, 409, origin)
     }
     console.error('delete_user_profile_failed', deleteProfileError.code ?? 'unknown')
     return json({ error: 'The account could not be removed.' }, 500, origin)
