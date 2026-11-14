@@ -1,11 +1,21 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getDocumentById } from '../services/documents'
+import { getDocumentById, restoreDocumentVersion } from '../services/documents'
 import { submitForApproval } from '../services/approvals'
 import { findPendingRevision } from '../services/revisions'
+import { getDevicesForDocument, isDevicesSchemaMissing } from '../services/devices'
 import { logActivity } from '../services/activityLogs'
-import { extractAttachments, getSignedAttachmentUrl } from '../lib/attachments'
-import type { DocStatus } from '../types/database'
+import { getSignedAttachmentUrl } from '../lib/attachments'
+import {
+  ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  isAttachmentsSchemaMissing,
+  listDocumentAttachments,
+  legacyAttachments,
+  selectDocumentAttachments,
+} from '../services/attachments'
+import { CATEGORY_STYLES, DEVICES_UNAVAILABLE_MESSAGE } from '../lib/devices'
+import { PERMISSIONS } from '../lib/permissions'
+import type { Device, DocStatus, DocumentAttachment } from '../types/database'
 import { useAuth } from '../contexts/AuthContext'
 import {
   ArrowLeft,
@@ -27,6 +37,8 @@ import {
   Loader2,
   Plus,
   Send,
+  HardDrive,
+  History,
 } from 'lucide-react'
 
 const STATUS_STYLES: Record<DocStatus, string> = {
@@ -46,11 +58,52 @@ const STATUS_ICONS: Record<DocStatus, React.ElementType> = {
 export function DocumentDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, can } = useAuth()
   const [doc, setDoc] = useState<any>(null)
+  const [devices, setDevices] = useState<Device[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [devicesError, setDevicesError] = useState<string | null>(null)
+  const [devicesUnavailable, setDevicesUnavailable] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [attachmentIds, setAttachmentIds] = useState<DocumentAttachment[] | null>(null)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [attachmentsUnavailable, setAttachmentsUnavailable] = useState(false)
+  const [restoreTarget, setRestoreTarget] = useState<{ id: string; version: string } | null>(null)
+  const [restoring, setRestoring] = useState(false)
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [restoreNotice, setRestoreNotice] = useState<string | null>(null)
+
+  // Reads the links separately so a devices failure never hides the document.
+  const loadLinkedDevices = async () => {
+    if (!id) return
+    try {
+      setDevices(await getDevicesForDocument(id))
+      setDevicesError(null)
+      setDevicesUnavailable(false)
+    } catch (err) {
+      console.error('Failed to load linked devices:', err)
+      if (isDevicesSchemaMissing(err)) setDevicesUnavailable(true)
+      else setDevicesError('Linked devices could not be loaded: ' + (err as Error).message)
+    }
+  }
+
+  // The registry, not document text, decides what may be downloaded. A failed
+  // read is reported instead of being shown as a document with no files.
+  const loadAttachments = async (documentId: string) => {
+    try {
+      const rows = await listDocumentAttachments(documentId)
+      setAttachmentIds(rows)
+      setAttachmentError(null)
+      setAttachmentsUnavailable(false)
+    } catch (err) {
+      console.error('Failed to load attachments:', err)
+      setAttachmentIds(null)
+      if (isAttachmentsSchemaMissing(err)) setAttachmentsUnavailable(true)
+      else setAttachmentError('Attachments could not be loaded: ' + (err as Error).message)
+    }
+  }
 
   useEffect(() => {
     async function loadDocument() {
@@ -58,6 +111,7 @@ export function DocumentDetail() {
         if (!id) return
         const documentData = await getDocumentById(id)
         setDoc(documentData)
+        await Promise.all([loadLinkedDevices(), loadAttachments(id)])
       } catch (err) {
         setError('Failed to load document: ' + (err as Error).message)
         console.error('Error loading document:', err)
@@ -72,6 +126,7 @@ export function DocumentDetail() {
     if (!doc || !user) return
     try {
       setSubmitting(true)
+      setSubmitError(null)
       const result = await submitForApproval(doc.id, user.id)
       if (result.notificationWarning) {
         console.warn('[DocumentDetail]', result.notificationWarning)
@@ -88,9 +143,43 @@ export function DocumentDetail() {
       const updated = await getDocumentById(doc.id)
       setDoc(updated)
     } catch (err) {
-      setError('Failed to submit for approval: ' + (err as Error).message)
+      console.error('Failed to submit for approval:', err)
+      setSubmitError('Failed to submit for approval: ' + (err as Error).message)
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  // Bringing a version back copies it forward as a new revision; no history row
+  // is edited and no stored file is re-uploaded.
+  const handleRestoreVersion = async () => {
+    if (!doc || !user || !restoreTarget) return
+    try {
+      setRestoring(true)
+      setRestoreError(null)
+      const sourceVersion = restoreTarget.version
+      const result = await restoreDocumentVersion(doc.id, restoreTarget.id)
+      await logActivity({
+        user_id: user.id,
+        action: 'edit',
+        target_type: 'document',
+        target_id: doc.id,
+        target_title: doc.title,
+        target_code: doc.code,
+        details: `Restored ${sourceVersion} as ${result.version}${result.staged ? ' (awaiting approval)' : ''}`,
+      })
+      const message = result.staged
+        ? `Version ${result.version} was proposed from ${sourceVersion} and is awaiting approval. What is published now is unchanged.`
+        : `Version ${result.version} was restored from ${sourceVersion}.`
+      setRestoreNotice(result.notice ? `${message} ${result.notice}` : message)
+      setRestoreTarget(null)
+      setDoc(await getDocumentById(doc.id))
+      await loadAttachments(doc.id)
+    } catch (err) {
+      console.error('Failed to restore version:', err)
+      setRestoreError('Failed to restore this version: ' + (err as Error).message)
+    } finally {
+      setRestoring(false)
     }
   }
 
@@ -137,23 +226,41 @@ export function DocumentDetail() {
 
   const statusKey = doc.status as DocStatus
   const StatusIcon = STATUS_ICONS[statusKey]
-  const attachments = extractAttachments(doc.content)
+  // Before the registry migration the markers are still worth showing, but only
+  // when the read failed as "table missing" rather than as a real error.
+  const currentVersion = (doc.versions || []).find((v: any) => v.version === doc.version)
+  const attachments = attachmentIds
+    ? selectDocumentAttachments(attachmentIds, currentVersion?.id ?? null)
+    : attachmentsUnavailable && !attachmentError
+      ? legacyAttachments(doc.content)
+      : []
 
   const pendingRevision = findPendingRevision(
     doc.versions as Array<{ id: string; version: string; status?: string | null }> | undefined,
     doc.version
   )
 
+  // Same rule the database uses for device links: managers always, agents only their own drafts.
+  const canLinkDevices = can(PERMISSIONS.LINK_DEVICES)
+    && (can(PERMISSIONS.EDIT_SUPERVISED_DOCUMENTS)
+        || (doc.owner_id === user?.id && doc.status !== 'Approved'))
+
+  // Restoring is authoring, so it follows the same reach. One pending revision at
+  // a time is the workflow rule, so the button waits while one is open.
+  const canRestore = can(PERMISSIONS.CREATE_VERSION)
+    && (can(PERMISSIONS.EDIT_SUPERVISED_DOCUMENTS)
+        || (doc.owner_id === user?.id && doc.status !== 'Approved'))
+
+  // A fresh tab keeps the document open; noopener keeps the new tab from
+  // reaching back into this window.
   const handleAttachmentDownload = async (path: string) => {
     try {
       const url = await getSignedAttachmentUrl(path)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = path.split('/').pop() || 'attachment'
-      a.click()
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) alert('Your browser blocked the download tab. Allow pop-ups for this site and try again.')
     } catch (err) {
       console.error('Failed to open attachment:', err)
-      alert('Could not open this attachment')
+      alert('This file is no longer available for download.')
     }
   }
 
@@ -230,6 +337,88 @@ export function DocumentDetail() {
           </button>
         </div>
       </div>
+
+      {submitError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm text-red-700">{submitError}</p>
+          <p className="text-xs text-red-600 mt-1">The document is unchanged and still on this page.</p>
+        </div>
+      )}
+
+      {restoreError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm text-red-700">{restoreError}</p>
+          <p className="text-xs text-red-600 mt-1">Nothing was restored: no version was added and no file was moved.</p>
+        </div>
+      )}
+
+      {restoreNotice && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start justify-between gap-3">
+          <p className="text-sm text-blue-800">{restoreNotice}</p>
+          <button
+            onClick={() => setRestoreNotice(null)}
+            className="text-xs text-blue-600 hover:text-blue-800 flex-shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {restoreTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setRestoreTarget(null)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <History className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Restore version {restoreTarget.version}?</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  Its text, metadata and files are copied forward as a new version. {restoreTarget.version} itself
+                  stays exactly as it is, and nothing is deleted.
+                  {doc.status === 'Approved' && ' The published document only changes once an approving reviewer accepts the new version.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setRestoreTarget(null)}
+                disabled={restoring}
+                className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRestoreVersion}
+                disabled={restoring}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-lg transition-colors"
+              >
+                {restoring && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {restoring ? 'Restoring...' : 'Restore version'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {attachmentsUnavailable && !attachmentError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <p className="text-sm text-amber-800">{ATTACHMENTS_UNAVAILABLE_MESSAGE}</p>
+        </div>
+      )}
+
+      {attachmentError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm text-red-700">{attachmentError}</p>
+          <button
+            onClick={() => id && loadAttachments(id)}
+            className="mt-2 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* main content */}
@@ -308,6 +497,62 @@ export function DocumentDetail() {
             <p className="text-sm text-slate-600 leading-relaxed">{doc.description}</p>
           </div>
 
+          {/* linked devices */}
+          {devicesError && (
+            <div className="bg-white rounded-xl border border-red-200 p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-900 mb-1">Linked Devices</h2>
+                  <p className="text-xs text-red-700">{devicesError}</p>
+                </div>
+                <button
+                  onClick={loadLinkedDevices}
+                  className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-red-700 border border-red-200 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+
+          {devicesUnavailable && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
+              <h2 className="text-sm font-semibold text-amber-900 mb-1">Linked Devices</h2>
+              <p className="text-xs text-amber-700">{DEVICES_UNAVAILABLE_MESSAGE}</p>
+            </div>
+          )}
+
+          {devices.length > 0 && (
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-slate-900">Linked Devices</h2>
+                {canLinkDevices && (
+                  <button
+                    onClick={() => navigate(`/documents/${doc.id}/edit`)}
+                    className="text-[11px] font-medium text-blue-600 hover:text-blue-700 transition-colors"
+                  >
+                    Edit links
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {devices.map(device => (
+                  <button
+                    key={device.id}
+                    onClick={() => navigate(`/devices/${device.id}`)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 border border-slate-200 hover:border-blue-200 hover:bg-blue-50/50 rounded-lg transition-colors"
+                  >
+                    <HardDrive className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-[12px] font-medium text-slate-700">{device.name}</span>
+                    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${CATEGORY_STYLES[device.category]}`}>
+                      {device.category}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* content */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <h2 className="text-sm font-semibold text-slate-900 mb-4">Document Content</h2>
@@ -318,17 +563,28 @@ export function DocumentDetail() {
             </div>
             {attachments.length > 0 && (
               <div className="mt-4 pt-4 border-t border-slate-100">
-                <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Attachments</p>
+                <p className="text-xs font-semibold text-slate-400 uppercase mb-2">
+                  Current document attachments
+                </p>
+                <p className="text-[11px] text-slate-400 mb-2">
+                  Files attached to the version you are viewing now. Older revisions keep their own files on their version pages.
+                </p>
                 <div className="space-y-1.5">
                   {attachments.map(a => (
-                    <button
-                      key={a.path}
-                      onClick={() => handleAttachmentDownload(a.path)}
-                      className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      {a.fileName}
-                    </button>
+                    <div key={a.path} className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleAttachmentDownload(a.path)}
+                        className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        {a.fileName}
+                      </button>
+                      {a.scope && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded uppercase">
+                          {a.scope === 'document' ? 'This document' : `From ${doc.version}`}
+                        </span>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -389,6 +645,20 @@ export function DocumentDetail() {
                         >
                           Open version
                         </button>
+                        {canRestore && !isCurrentVersion && (
+                          <button
+                            onClick={() => {
+                              setRestoreError(null)
+                              setRestoreTarget({ id: version.id, version: version.version })
+                            }}
+                            disabled={!!pendingRevision}
+                            title={pendingRevision ? `Revision ${pendingRevision.version} is awaiting approval` : `Copy ${version.version} forward as a new version`}
+                            className="mt-1 ml-3 flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                          >
+                            <History className="w-3 h-3" />
+                            Restore
+                          </button>
+                        )}
                       </div>
                     </div>
                   )

@@ -1,8 +1,16 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { getDocumentById } from '../services/documents'
-import { extractAttachments, normalizeStoragePath, getSignedAttachmentUrl } from '../lib/attachments'
+import { getSignedAttachmentUrl } from '../lib/attachments'
+import {
+  ATTACHMENTS_UNAVAILABLE_MESSAGE,
+  isAttachmentsSchemaMissing,
+  legacyAttachments,
+  listDocumentAttachments,
+  selectVersionAttachments,
+} from '../services/attachments'
 import { useAuth } from '../contexts/AuthContext'
+import type { DocumentAttachment } from '../types/database'
 import {
   ArrowLeft,
   Download,
@@ -25,6 +33,25 @@ export function VersionDetail() {
   const [doc, setDoc] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [registry, setRegistry] = useState<DocumentAttachment[] | null>(null)
+  const [registryUnavailable, setRegistryUnavailable] = useState(false)
+  const [registryError, setRegistryError] = useState<string | null>(null)
+
+  // Only the version's own associations are listed; nothing is inherited from
+  // the document or from a neighbouring revision.
+  const loadAttachments = async (documentId: string) => {
+    try {
+      setRegistry(await listDocumentAttachments(documentId))
+      setRegistryUnavailable(false)
+      setRegistryError(null)
+    } catch (err) {
+      console.error('Failed to load attachments:', err)
+      const missing = isAttachmentsSchemaMissing(err)
+      setRegistry(null)
+      setRegistryUnavailable(missing)
+      setRegistryError(missing ? null : 'Attachments could not be loaded: ' + (err as Error).message)
+    }
+  }
 
   useEffect(() => {
     async function loadData() {
@@ -32,6 +59,7 @@ export function VersionDetail() {
         if (!id) return
         const documentData = await getDocumentById(id)
         setDoc(documentData)
+        await loadAttachments(id)
       } catch (err) {
         setError('Failed to load version: ' + (err as Error).message)
         console.error('Error loading version:', err)
@@ -87,25 +115,22 @@ export function VersionDetail() {
 
   const isCurrent = version.version === doc.version
 
-  const markerAttachments = extractAttachments(version.content ?? null)
-  const attachments = [...markerAttachments]
-  if (version.file_path) {
-    const path = normalizeStoragePath(version.file_path)
-    if (path && !path.startsWith('http') && !attachments.some(a => a.path === path)) {
-      attachments.push({ path, fileName: version.file_name || path.split('/').pop() || path })
-    }
-  }
+  // Before the registry migration the markers are still shown, but only when
+  // the read failed as "not set up" rather than as a real error.
+  const attachments = registry
+    ? selectVersionAttachments(registry, versionId!)
+    : registryUnavailable && !registryError
+      ? legacyAttachments(version.content ?? null)
+      : []
 
   const handleAttachmentDownload = async (path: string) => {
     try {
       const url = await getSignedAttachmentUrl(path)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = path.split('/').pop() || 'attachment'
-      a.click()
+      const opened = window.open(url, '_blank', 'noopener,noreferrer')
+      if (!opened) alert('Your browser blocked the download tab. Allow pop-ups for this site and try again.')
     } catch (err) {
       console.error('Failed to open attachment:', err)
-      alert('Could not open this attachment')
+      alert('This file is no longer available for download.')
     }
   }
 
@@ -155,6 +180,24 @@ export function VersionDetail() {
           Open Current Document
         </button>
       </div>
+
+      {registryUnavailable && !registryError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <p className="text-sm text-amber-800">{ATTACHMENTS_UNAVAILABLE_MESSAGE}</p>
+        </div>
+      )}
+
+      {registryError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm text-red-700">{registryError}</p>
+          <button
+            onClick={() => id && loadAttachments(id)}
+            className="mt-2 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 space-y-5">
@@ -257,7 +300,12 @@ export function VersionDetail() {
                 </div>
                 {attachments.length > 0 && (
                   <div className="mt-4 pt-4 border-t border-slate-100">
-                    <p className="text-xs font-semibold text-slate-400 uppercase mb-2">Attachments</p>
+                    <p className="text-xs font-semibold text-slate-400 uppercase mb-2">
+                      Version attachments
+                    </p>
+                    <p className="text-[11px] text-slate-400 mb-2">
+                      These files belong to version {version.version} only.
+                    </p>
                     <div className="space-y-1.5">
                       {attachments.map(a => (
                         <button

@@ -1,15 +1,22 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { DocType } from '../types/database'
-import { createDocument, createDocumentVersion } from '../services/documents'
+import { createDocument, createDocumentVersion, updateDocument } from '../services/documents'
+import { syncDocumentDevices } from '../services/devices'
+import {
+  buildAttachmentPath,
+  storeAttachmentForRevision,
+  validateAttachmentFile,
+} from '../services/attachments'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
-import { supabase } from '../lib/supabase'
+import { DevicePicker } from '../components/DevicePicker'
+import { PERMISSIONS } from '../lib/permissions'
 import { ArrowLeft, Save, X, AlertCircle, ChevronDown, FileText, Loader2, Upload } from 'lucide-react'
 
 export function CreateDocument() {
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, can } = useAuth()
 
   const [form, setForm] = useState({
     title: '',
@@ -22,9 +29,28 @@ export function CreateDocument() {
   })
 
   const [file, setFile] = useState<File | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
+  const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null)
+  const [deviceIds, setDeviceIds] = useState<string[]>([])
+  const [createdDocId, setCreatedDocId] = useState<string | null>(null)
+  const [linkWarning, setLinkWarning] = useState<string | null>(null)
   const [showDiscardModal, setShowDiscardModal] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Returns false when the links were refused, so the caller can stop short
+  // of navigating and keep the chosen devices on screen.
+  const syncDevices = async (documentId: string): Promise<boolean> => {
+    try {
+      await syncDocumentDevices(documentId, deviceIds)
+      setLinkWarning(null)
+      return true
+    } catch (err) {
+      console.error('Failed to link devices:', err)
+      setLinkWarning(`The document was saved, but its device links were not: ${(err as Error).message}`)
+      return false
+    }
+  }
 
   const generateCode = (type: DocType): string => {
     const prefixes: Record<DocType, string> = {
@@ -44,23 +70,25 @@ export function CreateDocument() {
       return
     }
 
+    if (file && !can(PERMISSIONS.UPLOAD_DOCUMENTS)) {
+      setFileError('Your role cannot attach files to documents.')
+      return
+    }
+
+    if (file) {
+      const invalid = validateAttachmentFile(file)
+      if (invalid) {
+        setFileError(invalid)
+        return
+      }
+    }
+
     try {
       setLoading(true)
       setError(null)
+      setAttachmentWarning(null)
 
       const finalCode = form.code.trim() || generateCode(form.type)
-      let filePath: string | null = null
-
-      // Upload file to Supabase Storage if provided
-      if (file) {
-        const ext = file.name.split('.').pop()
-        const path = `${user.id}/${Date.now()}_${finalCode}.${ext}`
-        const { error: uploadError } = await supabase.storage
-          .from('documents')
-          .upload(path, file, { upsert: false })
-        if (uploadError) throw new Error('File upload failed: ' + uploadError.message)
-        filePath = path
-      }
 
       // Build tags — include category as a tag for Operational Cases
       const tagsArray = form.tags.split(',').map(t => t.trim()).filter(t => t !== '')
@@ -68,37 +96,68 @@ export function CreateDocument() {
         tagsArray.unshift(`Category: ${form.category.trim()}`)
       }
 
-      const contentWithFile = filePath ? `${form.content}\n\n[Attached file: ${filePath}]` : form.content
-
+      // The row comes first: an attachment is authorized by a registry record
+      // that points at an existing document.
       const doc = await createDocument({
         title: form.title,
         code: finalCode,
         type: form.type,
         version: 'v1.0',
         description: form.description,
-        content: contentWithFile,
+        content: form.content,
         tags: tagsArray,
         status: 'Draft',
         owner_id: user.id,
       })
 
-      try {
-        await createDocumentVersion(doc.id, {
+      // Remember the draft so a failed link can be retried without creating a duplicate.
+      setCreatedDocId(doc.id)
+
+      const snapshotVersion = async (content: string, filePath: string | null, fileName: string | null) => {
+        const version = await createDocumentVersion(doc.id, {
           version: 'v1.0',
           author_id: user.id,
           notes: 'Initial version',
           title: form.title,
           description: form.description,
-          content: contentWithFile,
+          content,
           type: form.type,
           status: 'Draft',
           tags: tagsArray,
           file_path: filePath,
-          file_name: file?.name ?? null,
+          file_name: fileName,
         })
+        return version?.id ?? null
+      }
+
+      // The initial file belongs to version v1.0, so its association is
+      // version-scoped: the file is stored, the snapshot is written with it, and
+      // only then does the registry bind the two. The live document row gets no
+      // association of its own, so nothing is inherited.
+      try {
+        if (file) {
+          const path = buildAttachmentPath(user.id, finalCode, file.name)
+          try {
+            const notice = await storeAttachmentForRevision(file, path, doc.id, async () => {
+              const content = `${form.content}\n\n[Attached file: ${path}]`
+              await updateDocument(doc.id, { content })
+              return snapshotVersion(content, path, file.name)
+            })
+            if (notice) setAttachmentWarning(notice)
+          } catch (err) {
+            // The draft is already saved, so report the problem and stay put.
+            console.error('Failed to attach the initial file or record its version:', err)
+            setAttachmentWarning('The document was saved, but its first version or file was not recorded: ' + (err as Error).message)
+          }
+        } else {
+          await snapshotVersion(form.content, null, null)
+        }
       } catch (err) {
         console.error('Failed to record initial version:', err)
+        setAttachmentWarning('The document was saved, but its initial version was not recorded.')
       }
+
+      const linkFailed = deviceIds.length > 0 && !(await syncDevices(doc.id))
 
       await logActivity({
         user_id: user.id,
@@ -110,6 +169,9 @@ export function CreateDocument() {
         details: `Created new ${form.type}: ${form.title}`,
       })
 
+      // Keep the draft on screen so only the links are retried.
+      if (linkFailed) return
+
       navigate('/documents')
     } catch (err) {
       setError('Failed to create document: ' + (err as Error).message)
@@ -117,6 +179,21 @@ export function CreateDocument() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Re-sends only the links of the draft that was already saved.
+  const retryLinkDevices = async () => {
+    if (!createdDocId) return
+    try {
+      setLoading(true)
+      await syncDevices(createdDocId)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const continueWithoutRelinking = () => {
+    navigate('/documents')
   }
 
   const handleDiscard = () => {
@@ -165,6 +242,34 @@ export function CreateDocument() {
           </div>
         )}
 
+        {attachmentWarning && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <p className="text-sm font-semibold text-amber-900">The document was saved, but its file needs attention.</p>
+            <p className="text-xs text-amber-700 mt-1">{attachmentWarning}</p>
+          </div>
+        )}
+
+        {linkWarning && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+            <p className="text-sm font-semibold text-amber-900">The document was saved, but its device links were not.</p>
+            <p className="text-xs text-amber-700 mt-1">{linkWarning}</p>
+            <div className="flex items-center gap-2 mt-3">
+              <button
+                onClick={retryLinkDevices}
+                className="px-3 py-1.5 text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white rounded-lg transition-colors"
+              >
+                Retry device linking
+              </button>
+              <button
+                onClick={continueWithoutRelinking}
+                className="px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 rounded-lg transition-colors"
+              >
+                Continue without these links
+              </button>
+            </div>
+          </div>
+        )}
+
         {loading && (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
@@ -199,11 +304,11 @@ export function CreateDocument() {
             </button>
             <button
               onClick={handleCreate}
-              disabled={!isFormValid}
+              disabled={!isFormValid || createdDocId !== null}
               className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
             >
               <Save className="w-3.5 h-3.5" />
-              Create Document
+              {createdDocId !== null ? 'Document Saved' : 'Create Document'}
             </button>
           </div>
         </div>
@@ -315,6 +420,7 @@ export function CreateDocument() {
               )}
 
               {/* file upload */}
+              {can(PERMISSIONS.UPLOAD_DOCUMENTS) ? (
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                   Attach File (optional)
@@ -327,14 +433,16 @@ export function CreateDocument() {
                     {file ? (
                       <p className="text-xs font-medium text-blue-700 truncate">{file.name}</p>
                     ) : (
-                      <p className="text-xs text-slate-500">Click to upload PDF, Word, or image file</p>
+                      <p className="text-xs text-slate-500">Click to choose a file</p>
                     )}
-                    <p className="text-[10px] text-slate-400 mt-0.5">Max 10MB</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      PDF, Word, Excel, PNG, JPEG or plain text — max 10MB
+                    </p>
                   </div>
                   {file && (
                     <button
                       type="button"
-                      onClick={e => { e.preventDefault(); setFile(null) }}
+                      onClick={e => { e.preventDefault(); setFile(null); setFileError(null) }}
                       className="text-slate-400 hover:text-red-500 transition-colors"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -344,11 +452,32 @@ export function CreateDocument() {
                     type="file"
                     className="hidden"
                     accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.txt"
-                    onChange={e => setFile(e.target.files?.[0] || null)}
+                    onChange={e => {
+                      const chosen = e.target.files?.[0] || null
+                      setFile(chosen)
+                      setFileError(chosen ? validateAttachmentFile(chosen) : null)
+                    }}
                   />
                 </label>
+                {fileError && (
+                  <p className="text-xs text-red-600 mt-1.5">{fileError}</p>
+                )}
               </div>
+              ) : (
+                <p className="text-xs text-slate-400">
+                  Your role cannot attach files to documents.
+                </p>
+              )}
             </div>
+
+            {/* linked devices */}
+            {can(PERMISSIONS.LINK_DEVICES) && (
+              <div className="bg-white rounded-xl border border-slate-200 p-6">
+                <h2 className="text-sm font-semibold text-slate-900 mb-1">Linked Devices</h2>
+                <p className="text-xs text-slate-500 mb-4">Attach this document to the devices it applies to</p>
+                <DevicePicker selectedIds={deviceIds} onChange={setDeviceIds} disabled={loading} />
+              </div>
+            )}
 
             {/* content */}
             <div className="bg-white rounded-xl border border-slate-200 p-6">

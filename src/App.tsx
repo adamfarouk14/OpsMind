@@ -11,6 +11,10 @@ import { DocumentDetail } from './pages/DocumentDetail'
 import { EditDocument } from './pages/EditDocument'
 import { VersionDetail } from './pages/VersionDetail'
 import { Search } from './pages/Search'
+import { Devices } from './pages/Devices'
+import { DeviceDetail } from './pages/DeviceDetail'
+import { CreateDevice } from './pages/CreateDevice'
+import { EditDevice } from './pages/EditDevice'
 import { AIKnowledge } from './pages/AIKnowledge'
 import { Approvals } from './pages/Approvals'
 import { Reports } from './pages/Reports'
@@ -42,6 +46,26 @@ function App() {
             </ProtectedRoute>
           } />
           <Route path="documents/:id/versions/:versionId" element={<VersionDetail />} />
+          <Route path="devices" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.VIEW_DEVICES}>
+              <Devices />
+            </ProtectedRoute>
+          } />
+          <Route path="devices/create" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.MANAGE_DEVICES}>
+              <CreateDevice />
+            </ProtectedRoute>
+          } />
+          <Route path="devices/:id" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.VIEW_DEVICES}>
+              <DeviceDetail />
+            </ProtectedRoute>
+          } />
+          <Route path="devices/:id/edit" element={
+            <ProtectedRoute requiredPermission={PERMISSIONS.MANAGE_DEVICES}>
+              <EditDevice />
+            </ProtectedRoute>
+          } />
           <Route path="search" element={
             <ProtectedRoute requiredPermission={PERMISSIONS.SEARCH_KNOWLEDGE}>
               <Search />

@@ -51,6 +51,12 @@ export const PERMISSIONS = {
   VIEW_ALL_CASES: 'view_all_cases',
   MANAGE_CASES: 'manage_cases',
 
+  // Devices
+  VIEW_DEVICES: 'view_devices',
+  MANAGE_DEVICES: 'manage_devices',
+  DELETE_DEVICES: 'delete_devices',
+  LINK_DEVICES: 'link_devices',
+
   // Notifications and reports
   VIEW_OWN_NOTIFICATIONS: 'view_own_notifications',
   VIEW_TEAM_REPORTS: 'view_team_reports',
@@ -97,6 +103,11 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     PERMISSIONS.VIEW_ALL_CASES,
     PERMISSIONS.MANAGE_CASES,
 
+    PERMISSIONS.VIEW_DEVICES,
+    PERMISSIONS.MANAGE_DEVICES,
+    PERMISSIONS.DELETE_DEVICES,
+    PERMISSIONS.LINK_DEVICES,
+
     PERMISSIONS.VIEW_OWN_NOTIFICATIONS,
   ],
 
@@ -123,6 +134,10 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     PERMISSIONS.VIEW_ALL_CASES,
     PERMISSIONS.MANAGE_CASES,
 
+    PERMISSIONS.VIEW_DEVICES,
+    PERMISSIONS.MANAGE_DEVICES,
+    PERMISSIONS.LINK_DEVICES,
+
     PERMISSIONS.VIEW_OWN_NOTIFICATIONS,
     PERMISSIONS.VIEW_TEAM_REPORTS,
   ],
@@ -143,6 +158,11 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
 
     PERMISSIONS.CREATE_CASES,
     PERMISSIONS.EDIT_OWN_CASES,
+
+    // Agents read the catalogue and link their own work; the database
+    // restricts which documents that actually covers.
+    PERMISSIONS.VIEW_DEVICES,
+    PERMISSIONS.LINK_DEVICES,
 
     PERMISSIONS.VIEW_OWN_NOTIFICATIONS,
   ],
