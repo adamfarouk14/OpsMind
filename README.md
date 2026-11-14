@@ -103,11 +103,11 @@ The permanent record is never created before the file exists, and a marker never
 1. **New document, or a document edited without a new version** — a `pending` row is registered for the chosen path, the file is uploaded into it (`upsert: false`), the upload is confirmed to `available`, and only then is the content saved with the marker.
 2. **New version (revision)** — a temporary document-level `pending` row authorizes the upload, the file is stored and confirmed, the new version row is written with the file, a version-scoped `available` row is created, and the staging row is retired. A staged revision's file therefore never appears on the live document page.
 3. **Failure during upload** — the pending row is cancelled, and a cancellation that could not happen is reported instead of swallowed.
-4. **Failure after the file landed** — the file is real, so its record is kept for reconciliation (`reconcile_attachment_upload`) or for the Admin cleanup queue; nothing is silently abandoned and nothing is deleted behind the user's back.
+4. **Failure after the file landed** — the file is real, so its record is kept rather than abandoned; nothing is silently deleted behind the user's back.
 
-### Pending uploads and the cleanup queue (Administration → Attachments)
+### The cleanup queue
 
-Admins can inspect uploads left pending for over an hour, clear the ones whose file never arrived, and reconcile the ones whose file did. Reconciling and purging never touch a Storage object. Removing a stored file requires a row in `public.attachment_cleanup_requests`, which only a definer function creates for an Admin; the queue is readable by Admins and writable by nobody through the API, so a failed removal stays visible and retryable rather than disappearing.
+There is no admin screen for it. Removing a stored file requires a row in `public.attachment_cleanup_requests`, which only a definer function creates for an Admin, and the only path that creates one is deleting a document. The queue is readable by Admins and writable by nobody through the API, so a removal that failed stays recorded rather than disappearing.
 
 ### Download
 

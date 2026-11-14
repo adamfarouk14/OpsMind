@@ -81,8 +81,8 @@ export interface RevisionDecision {
   notificationWarning?: string
 }
 
-// Publishing a revision is an approval: the role must allow it, and the
-// reviewer can be neither the author of the revision nor the document owner.
+// Publishing a revision is an approval: Admin decides any revision, a Manager
+// may not decide one they authored or own.
 async function assertRevisionReviewer(
   rev: RevisionCandidate,
   permission: Permission,

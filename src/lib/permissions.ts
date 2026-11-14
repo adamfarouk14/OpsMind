@@ -203,13 +203,14 @@ export function canViewRecord(subject: PermissionSubject, ownerId: string | null
   return status === 'Approved'
 }
 
-// Approving your own submission is refused for every role, so Admin cannot
-// silently bypass review of content it authored.
+// Admin decides any submission, including one they authored. A Manager still
+// may not review content that came from their own account.
 export function canReviewRecord(
   subject: PermissionSubject,
   record: { owner_id?: string | null; author_id?: string | null },
 ): boolean {
   if (!roleHasAny(subject.role, [PERMISSIONS.APPROVE_DOCUMENTS])) return false
+  if (subject.role === 'Admin') return true
   if (subject.id && (subject.id === record.owner_id || subject.id === record.author_id)) return false
   return true
 }

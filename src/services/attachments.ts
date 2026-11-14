@@ -167,13 +167,6 @@ export async function confirmAttachment(attachmentId: string): Promise<void> {
   await callAttachmentRpc('complete_attachment_upload', { p_attachment_id: attachmentId })
 }
 
-// Re-confirms a pending record whose file really landed. Meant for the
-// reconciliation an Admin or the original uploader runs after a completion
-// that failed for some other reason.
-export async function reconcileAttachment(attachmentId: string): Promise<void> {
-  await callAttachmentRpc('reconcile_attachment_upload', { p_attachment_id: attachmentId })
-}
-
 // Discarding a pending record never touches Storage. It reports why it could
 // not discard instead of failing quietly: a leftover pending row is invisible
 // to everyone except an Admin unless the caller is told.
@@ -209,9 +202,8 @@ function withDiscardProblem(err: unknown, discardProblem: string | null): Error 
 // Order that cannot leave a file nobody can reach: the pending row authorizes
 // the upload, the confirmation proves the bytes and the uploader, and only then
 // is a marker written into the document. If that last write fails the file stays
-// registered and downloadable - visible to whoever may see the document and
-// removable through the Admin cleanup queue - instead of becoming a marker that
-// points at a record nobody has.
+// registered and downloadable - visible to whoever may see the document -
+// instead of becoming a marker that points at a record nobody has.
 // Returns a notice when the registry migration is not applied yet.
 export async function storeAttachment(
   file: File,
@@ -240,11 +232,10 @@ export async function storeAttachment(
   } catch (err) {
     const discardProblem = await abandonAttachment(attachmentId)
     if (discardProblem) {
-      // The bytes are in the bucket, so the record is kept for reconciliation
-      // rather than abandoned and the file left with nothing pointing at it.
+      // The bytes are in the bucket, so the record is kept rather than
+      // abandoned and the file left with nothing pointing at it.
       throw new Error(
-        `${reasonOf(err)} The file is stored, so its pending record was kept. ` +
-        `Reconcile it, or queue it for Admin cleanup.`
+        `${reasonOf(err)} The file is stored, so its pending record was kept.`
       )
     }
     throw err
@@ -255,7 +246,7 @@ export async function storeAttachment(
   } catch (err) {
     throw new Error(
       `The file is stored and attached, but the document text was not updated: ${reasonOf(err)}. ` +
-      `The attachment stays recorded and can be removed through the Admin cleanup queue.`
+      `The attachment stays recorded, and deleting the document removes it.`
     )
   }
   return null
@@ -292,8 +283,7 @@ export async function storeAttachmentForRevision(
     const discardProblem = await abandonAttachment(stagingId)
     if (discardProblem) {
       throw new Error(
-        `${reasonOf(err)} The file is stored, so its pending record was kept. ` +
-        `Reconcile it, or queue it for Admin cleanup.`
+        `${reasonOf(err)} The file is stored, so its pending record was kept.`
       )
     }
     throw err
@@ -304,13 +294,13 @@ export async function storeAttachmentForRevision(
   const versionId = await createRevision().catch(err => {
     throw new Error(
       `The file is stored and attached, but the new version was not created: ${reasonOf(err)}. ` +
-      `The attachment stays recorded and can be removed through the Admin cleanup queue.`
+      `The attachment stays recorded, and deleting the document removes it.`
     )
   })
   if (!versionId) {
     throw new Error(
       `The file is stored and attached, but the new version was not recorded. ` +
-      `The attachment stays recorded and can be removed through the Admin cleanup queue.`
+      `The attachment stays recorded, and deleting the document removes it.`
     )
   }
 
@@ -459,29 +449,12 @@ function toDownload(attachment: DocumentAttachment): AttachmentDownload {
   }
 }
 
-export interface AttachmentCleanupRequest {
-  request_id: string
-  storage_path: string
-  status: 'queued' | 'removed' | 'failed'
-  requested_at: string
-  last_error: string | null
-}
-
 // Admin-only: the authorization that lets a Storage DELETE through. Without it
 // the file stays, even for an Admin.
 export async function requestAttachmentCleanup(attachmentId: string): Promise<string> {
   const id = await callAttachmentRpc('request_attachment_cleanup', { p_attachment_id: attachmentId })
   if (!id) throw new Error('The file could not be queued for cleanup.')
   return id
-}
-
-export async function listAttachmentCleanupRequests(): Promise<AttachmentCleanupRequest[]> {
-  const { data, error } = await supabase.rpc('list_attachment_cleanup_requests')
-  if (error) {
-    if (isAttachmentsSchemaMissing(error)) return []
-    throw error
-  }
-  return (data || []) as AttachmentCleanupRequest[]
 }
 
 // Records the outcome so a failed cleanup stays visible and retryable.
@@ -496,33 +469,6 @@ export async function resolveAttachmentCleanup(
     p_error: lastError ?? null,
   })
   if (error && !isAttachmentsSchemaMissing(error)) throw error
-}
-
-export interface StalePendingUpload {
-  attachment_id: string
-  document_id: string
-  storage_path: string
-  uploaded_by: string | null
-  created_at: string
-  file_exists: boolean
-}
-
-// Admin inspection of pending records left behind by an interrupted upload.
-export async function listStalePendingUploads(olderThan = '01:00:00'): Promise<StalePendingUpload[]> {
-  const { data, error } = await supabase.rpc('list_stale_pending_uploads', { p_older_than: olderThan })
-  if (error) {
-    if (isAttachmentsSchemaMissing(error)) return []
-    throw error
-  }
-  return (data || []) as StalePendingUpload[]
-}
-
-// Clears pending records whose file never arrived. Files that did arrive are
-// left for reconciliation, and no Storage object is deleted here.
-export async function purgeStalePendingUploads(olderThan = '01:00:00'): Promise<number> {
-  const { data, error } = await supabase.rpc('purge_stale_pending_uploads', { p_older_than: olderThan })
-  if (error) throw error
-  return Number(data ?? 0)
 }
 
 // Registry rows never inherit: the live document page shows the document's own

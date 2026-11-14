@@ -100,8 +100,8 @@ async function rollbackApprovalRow(snapshot: ApprovalSnapshot): Promise<void> {
 }
 
 // Both decision paths run the same gate: the caller's role must allow the
-// verb, the decision must be recorded under the caller's own account, and no
-// reviewer may decide on a submission they own.
+// verb, and the decision must be recorded under the caller's own account.
+// Admin may decide any submission; a Manager may not decide their own.
 async function assertReviewer(
   documentId: string,
   approverId: string,

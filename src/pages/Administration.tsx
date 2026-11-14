@@ -4,20 +4,9 @@ import { createManagedUser } from '../services/auth'
 import { logActivity } from '../services/activityLogs'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
-import { ATTACHMENT_BUCKET } from '../lib/attachments'
+import { isAttachmentsSchemaMissing } from '../services/attachments'
 import { normalizeUsername, validateUsername } from '../lib/usernames'
 import { PERMISSIONS } from '../lib/permissions'
-import {
-  isAttachmentsSchemaMissing,
-  listAttachmentCleanupRequests,
-  listStalePendingUploads,
-  purgeStalePendingUploads,
-  reconcileAttachment,
-  resolveAttachmentCleanup,
-  isAttachmentFilePresent,
-  type AttachmentCleanupRequest,
-  type StalePendingUpload,
-} from '../services/attachments'
 import type { UserRole, UserStatus } from '../types/database'
 import {
   Users,
@@ -37,7 +26,6 @@ import {
   UserX,
   Trash2,
   AlertTriangle,
-  Paperclip,
 } from 'lucide-react'
 
 const ROLE_STYLES: Record<string, string> = {
@@ -53,15 +41,8 @@ const STATUS_STYLES: Record<string, string> = {
   Inactive: 'bg-slate-100 text-slate-600',
 }
 
-function attachmentReadMessage(err: unknown): string {
-  if (isAttachmentsSchemaMissing(err)) {
-    return 'The attachment registry migration has not been applied yet, so there is nothing to inspect here.'
-  }
-  return 'The attachment registry could not be read: ' + (err as Error).message
-}
-
 export function Administration() {
-  const [activeTab, setActiveTab] = useState<'users' | 'roles' | 'settings' | 'attachments'>('users')
+  const [activeTab, setActiveTab] = useState<'users' | 'roles' | 'settings'>('users')
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<'All' | UserRole>('All')
   const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Inactive'>('All')
@@ -69,7 +50,7 @@ export function Administration() {
   const [roles, setRoles] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const { user: currentUser, can, hasRole } = useAuth()
+  const { user: currentUser, can } = useAuth()
 
   // Add User modal
   const [showAddUserModal, setShowAddUserModal] = useState(false)
@@ -93,13 +74,6 @@ export function Administration() {
   const [canDeleteUser, setCanDeleteUser] = useState(false)
   const [deleteBlockers, setDeleteBlockers] = useState<string[]>([])
 
-  // Attachment registry: unfinished uploads and the deletion queue.
-  const [staleUploads, setStaleUploads] = useState<StalePendingUpload[] | null>(null)
-  const [cleanupRequests, setCleanupRequests] = useState<AttachmentCleanupRequest[]>([])
-  const [attachmentBusy, setAttachmentBusy] = useState(false)
-  const [attachmentNote, setAttachmentNote] = useState<string | null>(null)
-  const [attachmentError, setAttachmentError] = useState<string | null>(null)
-
   // Department settings
   const [deptSettings, setDeptSettings] = useState({ name: 'Technical Support', code: 'TS-001', autoApprove: false, requireVersioning: true })
   const [savingDept, setSavingDept] = useState(false)
@@ -109,15 +83,6 @@ export function Administration() {
   const [sysConfig, setSysConfig] = useState({ retentionDays: 365, maxFileSizeMb: 10, enableAudit: true })
   const [savingSys, setSavingSys] = useState(false)
   const [sysSaved, setSysSaved] = useState(false)
-
-  // Only an Admin may inspect the registry: the database checks the same rule.
-  const isAdmin = hasRole('Admin')
-
-  useEffect(() => {
-    if (activeTab === 'attachments' && staleUploads === null) {
-      loadAttachmentState()
-    }
-  }, [activeTab])
 
   useEffect(() => {
     async function loadData() {
@@ -359,86 +324,6 @@ export function Administration() {
     }
   }
 
-  // Inspection only: nothing here lists the bucket and nothing deletes a file
-  // that is not already sitting in the cleanup queue.
-  const loadAttachmentState = async () => {
-    setAttachmentBusy(true)
-    setAttachmentError(null)
-    try {
-      const [stale, queue] = await Promise.all([listStalePendingUploads(), listAttachmentCleanupRequests()])
-      setStaleUploads(stale)
-      setCleanupRequests(queue)
-    } catch (err) {
-      setStaleUploads(null)
-      setAttachmentError(attachmentReadMessage(err))
-    } finally {
-      setAttachmentBusy(false)
-    }
-  }
-
-  const handlePurgeStale = async () => {
-    setAttachmentBusy(true)
-    setAttachmentError(null)
-    setAttachmentNote(null)
-    try {
-      const cleared = await purgeStalePendingUploads()
-      const kept = (staleUploads || []).filter(row => row.file_exists).length
-      setAttachmentNote(
-        `${cleared} unfinished record(s) cleared. ${kept} record(s) whose file did arrive were kept, so their files were not touched.`
-      )
-      await loadAttachmentState()
-    } catch (err) {
-      setAttachmentError(attachmentReadMessage(err))
-    } finally {
-      setAttachmentBusy(false)
-    }
-  }
-
-  const handleReconcile = async (attachmentId: string) => {
-    setAttachmentBusy(true)
-    setAttachmentError(null)
-    try {
-      await reconcileAttachment(attachmentId)
-      setAttachmentNote('The file was found in the bucket, so the record is now available.')
-      await loadAttachmentState()
-    } catch (err) {
-      setAttachmentError('The record could not be reconciled: ' + (err as Error).message)
-    } finally {
-      setAttachmentBusy(false)
-    }
-  }
-
-  // The queue row is what authorizes this delete; without it Storage refuses.
-  const handleRetryCleanup = async (request: AttachmentCleanupRequest) => {
-    setAttachmentBusy(true)
-    setAttachmentError(null)
-    setAttachmentNote(null)
-    try {
-      const { error } = await supabase.storage.from(ATTACHMENT_BUCKET).remove([request.storage_path])
-      if (error) {
-        await resolveAttachmentCleanup(request.request_id, false, error.message)
-        setAttachmentNote('The file could not be removed, so the request stays open: ' + error.message)
-      } else {
-        const present = await isAttachmentFilePresent(request.storage_path)
-        if (present === false) {
-          await resolveAttachmentCleanup(request.request_id, true)
-          setAttachmentNote('The file was removed.')
-        } else {
-          const why = present === null
-            ? 'The removal could not be verified.'
-            : 'The file is still in the bucket.'
-          await resolveAttachmentCleanup(request.request_id, false, why)
-          setAttachmentNote(`${why} The request stays open.`)
-        }
-      }
-      await loadAttachmentState()
-    } catch (err) {
-      setAttachmentError('The cleanup request could not be retried: ' + (err as Error).message)
-    } finally {
-      setAttachmentBusy(false)
-    }
-  }
-
   const handleRoleChange = async (userId: string, roleName: string) => {
     if (!can(PERMISSIONS.ASSIGN_ROLES)) {
       alert('Only an administrator can assign roles.')
@@ -576,7 +461,6 @@ export function Administration() {
               { id: 'users', label: 'Users', icon: Users, badge: users.length },
               { id: 'roles', label: 'Roles', icon: Shield, badge: roles.length },
               { id: 'settings', label: 'Settings', icon: Settings, badge: null },
-              ...(isAdmin ? [{ id: 'attachments', label: 'Attachments', icon: Paperclip, badge: null }] : []),
             ].map(tab => {
               const Icon = tab.icon
               return (
@@ -897,118 +781,6 @@ export function Administration() {
                     Save Changes
                   </button>
                 </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── Attachments Tab ── */}
-          {isAdmin && activeTab === 'attachments' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl px-4 py-3">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">Attachment registry</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Interrupted uploads and queued file removals. Nothing here deletes a file that is still referenced.
-                  </p>
-                </div>
-                <button
-                  onClick={loadAttachmentState}
-                  disabled={attachmentBusy}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg disabled:opacity-40"
-                >
-                  {attachmentBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                  Refresh
-                </button>
-              </div>
-
-              {attachmentError && (
-                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-                  <p className="text-sm text-red-700">{attachmentError}</p>
-                </div>
-              )}
-              {attachmentNote && (
-                <div className="bg-sky-50 border border-sky-200 rounded-xl p-4">
-                  <p className="text-sm text-sky-800">{attachmentNote}</p>
-                </div>
-              )}
-
-              {staleUploads && (
-                <div className="bg-white border border-slate-200 rounded-xl p-4">
-                  <div className="flex items-center justify-between gap-3 mb-3">
-                    <h4 className="text-sm font-bold text-slate-900">Unfinished uploads</h4>
-                    <button
-                      onClick={handlePurgeStale}
-                      disabled={attachmentBusy || staleUploads.length === 0}
-                      className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white rounded-lg"
-                    >
-                      Clear records with no file
-                    </button>
-                  </div>
-                  {staleUploads.length === 0 ? (
-                    <p className="text-xs text-slate-500">No upload has been left pending for more than an hour.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {staleUploads.map(row => (
-                        <div key={row.attachment_id} className="flex items-start justify-between gap-3 border border-slate-100 rounded-lg px-3 py-2">
-                          <div className="min-w-0">
-                            <p className="text-xs font-medium text-slate-700 truncate">{row.storage_path}</p>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              Waiting since {new Date(row.created_at).toLocaleString()} ·{' '}
-                              {row.file_exists ? 'the file is in the bucket' : 'no file arrived'}
-                            </p>
-                          </div>
-                          {row.file_exists && (
-                            <button
-                              onClick={() => handleReconcile(row.attachment_id)}
-                              disabled={attachmentBusy}
-                              className="flex-shrink-0 px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-lg"
-                            >
-                              Reconcile
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-xs text-slate-500 mt-3">
-                    Clearing removes only records whose file never arrived. A record whose file is in the bucket stays until it is
-                    reconciled or its document is deleted.
-                  </p>
-                </div>
-              )}
-
-              <div className="bg-white border border-slate-200 rounded-xl p-4">
-                <h4 className="text-sm font-bold text-slate-900 mb-3">File removal queue</h4>
-                {cleanupRequests.length === 0 ? (
-                  <p className="text-xs text-slate-500">Nothing is waiting to be removed.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {cleanupRequests.map(request => (
-                      <div key={request.request_id} className="flex items-start justify-between gap-3 border border-slate-100 rounded-lg px-3 py-2">
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-slate-700 truncate">{request.storage_path}</p>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {request.status} · requested {new Date(request.requested_at).toLocaleString()}
-                            {request.last_error && <span className="text-red-600"> · {request.last_error}</span>}
-                          </p>
-                        </div>
-                        {request.status !== 'removed' && (
-                          <button
-                            onClick={() => handleRetryCleanup(request)}
-                            disabled={attachmentBusy}
-                            className="flex-shrink-0 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white rounded-lg"
-                          >
-                            Remove again
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <p className="text-xs text-slate-500 mt-3">
-                  A queued request is the only thing that lets a file be deleted from Storage. Files no document points at are
-                  listed here only when something registered them first.
-                </p>
               </div>
             </div>
           )}
